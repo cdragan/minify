@@ -1,0 +1,202 @@
+#!/usr/bin/env kos
+
+import base: print, range, buffer, map
+import io
+import datetime: now
+
+fun update_prob(count, byte)
+{
+    for const i in range(byte + 1, 257) {
+        count[i] += 1
+    }
+}
+
+fun get_prob(count, byte)
+{
+    const low  = count[byte]
+    const high = count[byte + 1]
+    const sum  = count[256]
+
+    update_prob(count, byte)
+
+    return [low, high, sum]
+}
+
+fun get_char(count, scaled_prob)
+{
+    for const byte in range(0, 256) {
+        if scaled_prob < count[byte + 1] {
+            return byte
+        }
+    }
+    assert false
+}
+
+# Performs compression using arithmetic coding.
+#
+# input parameter is an iterable object which yields subsequent
+# byte values (integers in range [0..255]) to compress.
+#
+# This function is a generator, which yields subsequent bit values
+# as integers of 0 and 1.
+#
+# Length of input is not encoded in the output stream, so when
+# decoding the output during decompression, length must be
+# handled separately.
+fun compress(input)
+{
+    var count       = [range(257)...]
+    var low         = 0
+    var high        = 0xFFFF_FFFF
+    var num_pending = 0
+
+    for const byte in input {
+
+        const new_low, new_high, new_sum = get_prob(count, byte)
+
+        const range = high - low + 1
+        high = low + (range * new_high / new_sum) - 1
+        low  = low + (range * new_low  / new_sum)
+
+        loop {
+            if high < 0x8000_0000 || low >= 0x8000_0000 {
+                var out_bit = (high < 0x8000_0000) ? 0 : 1
+
+                yield out_bit
+
+                out_bit = 1 - out_bit
+                while num_pending {
+                    yield out_bit
+                    num_pending -= 1
+                }
+            }
+            else if low >= 0x4000_0000 && high < 0xC000_0000 {
+                num_pending += 1
+                low  -= 0x4000_0000
+                high -= 0x4000_0000
+            }
+            else {
+                break
+            }
+
+            low  = (low << 1) & 0xFFFF_FFFF
+            high = ((high << 1) & 0xFFFF_FFFF) + 1
+        }
+    }
+
+    var out_bit = (low < 0x4000_0000) ? 0 : 1
+
+    yield out_bit
+
+    out_bit = 1 - out_bit
+    # TODO it should suffice to emit a single bit, because the decoder
+    # duplicates the last bit
+    while num_pending {
+        yield out_bit
+        num_pending -= 1
+    }
+}
+
+fun pull_bits(input, num_bits, val)
+{
+    if input.iter {
+        for const b in input.iter {
+            val = (val << 1) | (b - 0x30)
+            num_bits -= 1
+
+            if ! num_bits {
+                val &= 0xFFFF_FFFF
+                return val
+            }
+        }
+    }
+
+    input.iter = void
+    const or_mask = (val & 1) ? ((1 << num_bits) - 1) : 0 # duplicate last bit
+    val = ((val << num_bits) | or_mask) & 0xFFFF_FFFF
+    return val
+}
+
+# Performs decompression using arithmetic coding.
+#
+# input parameter is a buffer containing values 0x30 and 0x31 indicating
+# compressed 0s and 1s in ASCII.
+#
+# num_bytes parameter is the expected size of the output, i.e. the number
+# of bytes to emit.
+#
+# This function is a generator, which yields subsequent output bytes
+# as integers in [0..255] range.
+fun decompress(input, num_bytes)
+{
+    var   count = [range(257)...]
+    var   low   = 0
+    var   high  = 0xFFFF_FFFF
+    const input = { iter: input.iterator() }
+    var   value = pull_bits(input, 32, 0)
+
+    loop {
+        const range       = high - low + 1
+        const scaled_prob = ((value - low + 1) * count[256] - 1) / range
+        const byte        = get_char(count, scaled_prob)
+
+        yield byte
+
+        num_bytes -= 1
+        if ! num_bytes {
+            break
+        }
+
+        const new_low, new_high, new_sum = get_prob(count, byte)
+
+        high = low + (range * new_high) / new_sum - 1
+        low  = low + (range * new_low)  / new_sum
+
+        loop {
+            if high < 0x8000_0000 || low >= 0x8000_0000 {
+            }
+            else if low >= 0x4000_0000 && high < 0xC000_0000 {
+                value -= 0x4000_0000
+                low   -= 0x4000_0000
+                high  -= 0x4000_0000
+            }
+            else {
+                break
+            }
+
+            low  = (low << 1) & 0xFFFF_FFFF
+            high = ((high << 1) & 0xFFFF_FFFF) + 1
+
+            value = pull_bits(input, 1, value)
+        }
+    }
+}
+
+fun main
+{
+    const buf = io.stdin.read()
+    print("input \(buf.size * 8) bits")
+
+    print("Compressing...")
+    const comp_start = now()
+    const out = buf -> compress -> map(x => x + 0x30) -> buffer
+    const comp_time = now() - comp_start
+    print("output \(out.size) bits \(out.size * 100 / (buf.size * 8))% \(comp_time / 1000) ms")
+
+    print("Decompressing...")
+    const decomp_start = now()
+    const final = buffer(decompress(out, buf.size))
+    const decomp_time = now() - decomp_start
+    print("decompressed \(final.size * 8) bits \(decomp_time / 1000) ms")
+
+    assert buf.size == final.size
+    if buf != final {
+        for const i in range(buf.size) {
+            if buf[i] != final[i] {
+                print("ERROR at position \(i): input \(buf[i]) decompressed \(final[i])")
+            }
+        }
+    }
+}
+
+main()
