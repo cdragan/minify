@@ -4,35 +4,59 @@
 # Copyright (c) 2021 Chris Dragan
 
 import base: print, range, buffer, map
+import base:hex
 import io
 import datetime: now
 
-fun update_prob(count, byte)
+fun init_model
 {
+    return { count: [range(257)...], history: [], front: 0 }
+}
+
+fun get_total(model)
+{
+    return model.count[256]
+}
+
+fun update_prob(model, byte)
+{
+    const count = model.count
     for const i in range(byte + 1, 257) {
         count[i] += 1
     }
 }
 
-fun get_prob(count, byte)
+fun get_prob(model, byte)
 {
-    const low  = count[byte]
-    const high = count[byte + 1]
-    const sum  = count[256]
+    const low  = model.count[byte]
+    const high = model.count[byte + 1]
+    const sum  = model.count[256]
 
-    update_prob(count, byte)
+    update_prob(model, byte)
 
     return [low, high, sum]
 }
 
-fun get_char(count, scaled_prob)
+fun get_char(model, scaled_prob)
 {
+    const count = model.count
     for const byte in range(0, 256) {
         if scaled_prob < count[byte + 1] {
             return byte
         }
     }
+    print("scaled_prob \(scaled_prob), total \(count[256])")
     assert false
+}
+
+fun bitstr(x)
+{
+    const a = []
+    for const i in range(12) {
+        const shift = 31 - i
+        a.push((x >> shift) & 1)
+    }
+    return "".join(a)
 }
 
 # Performs compression using arithmetic coding.
@@ -48,14 +72,14 @@ fun get_char(count, scaled_prob)
 # handled separately.
 fun compress(input)
 {
-    var count       = [range(257)...]
+    var model       = init_model()
     var low         = 0
     var high        = 0xFFFF_FFFF
     var num_pending = 0
 
     for const byte in input {
 
-        const new_low, new_high, new_sum = get_prob(count, byte)
+        const new_low, new_high, new_sum = get_prob(model, byte)
 
         const range = high - low + 1
         high = low + (range * new_high / new_sum) - 1
@@ -115,7 +139,7 @@ fun pull_bits(input, num_bits, val)
     }
 
     input.iter = void
-    const or_mask = (val & 1) ? ((1 << num_bits) - 1) : 0 # duplicate last bit
+    const or_mask = 1#(val & 1) ? ((1 << num_bits) - 1) : 0 # duplicate last bit
     val = ((val << num_bits) | or_mask) & 0xFFFF_FFFF
     return val
 }
@@ -132,7 +156,7 @@ fun pull_bits(input, num_bits, val)
 # as integers in [0..255] range.
 fun decompress(input, num_bytes)
 {
-    var   count = [range(257)...]
+    var   model = init_model()
     var   low   = 0
     var   high  = 0xFFFF_FFFF
     const input = { iter: input.iterator() }
@@ -140,8 +164,8 @@ fun decompress(input, num_bytes)
 
     loop {
         const range       = high - low + 1
-        const scaled_prob = ((value - low + 1) * count[256] - 1) / range
-        const byte        = get_char(count, scaled_prob)
+        const scaled_prob = ((value - low + 1) * get_total(model) - 1) / range
+        const byte        = get_char(model, scaled_prob)
 
         yield byte
 
@@ -150,7 +174,7 @@ fun decompress(input, num_bytes)
             break
         }
 
-        const new_low, new_high, new_sum = get_prob(count, byte)
+        const new_low, new_high, new_sum = get_prob(model, byte)
 
         high = low + (range * new_high) / new_sum - 1
         low  = low + (range * new_low)  / new_sum
