@@ -7,18 +7,16 @@
 #include <assert.h>
 #include <string.h>
 
-#define MAX_HISTORY 2048
-
 typedef struct {
     uint32_t prob[2];
     uint32_t history_next;
     uint32_t window_size;
-    uint8_t  history[MAX_HISTORY * 2];
+    uint8_t  history[MAX_WINDOW_SIZE * 2];
 } MODEL;
 
 static void init_model(MODEL *model, uint32_t window_size)
 {
-    assert(window_size <= MAX_HISTORY);
+    assert(window_size <= MAX_WINDOW_SIZE);
 
     model->prob[0]      = 0;
     model->prob[1]      = 0;
@@ -34,8 +32,8 @@ static void update_model(MODEL *model, uint32_t bit)
 
     ++model->prob[bit];
 
-    if (model->history_next == MAX_HISTORY * 2) {
-        const uint32_t prune_point = MAX_HISTORY * 2 - window_size;
+    if (model->history_next == MAX_WINDOW_SIZE * 2) {
+        const uint32_t prune_point = MAX_WINDOW_SIZE * 2 - window_size;
         memcpy(model->history, &model->history[prune_point], window_size);
         model->history_next = window_size;
     }

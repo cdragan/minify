@@ -9,6 +9,11 @@ minify_src_files += minify.c
 minify_src_files += find_repeats.c
 minify_src_files += load_file.c
 
+targets += arith_encoder
+arith_encoder_src_files += arith_encode_file.c
+arith_encoder_src_files += arith_encode.c
+arith_encoder_src_files += load_file.c
+
 tests += test_repeats
 test_repeats_src_files += test_repeats.c
 test_repeats_src_files += find_repeats.c
@@ -146,11 +151,11 @@ CMDLINE_PATH = $(out_dir)/$1$(exe_suffix)
 ##############################################################################
 # Rules
 
-default: $(call CMDLINE_PATH,$(targets))
+default: $(foreach target, $(targets), $(call CMDLINE_PATH,$(target)))
 
 .PHONY: default
 
-all: default $(call CMDLINE_PATH,$(tests))
+all: default $(foreach test, $(tests), $(call CMDLINE_PATH,$(test)))
 
 clean:
 	rm -rf $(out_dir)
