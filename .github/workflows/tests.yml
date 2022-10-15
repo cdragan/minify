@@ -1,0 +1,37 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  unix:
+    strategy:
+      matrix:
+        os:
+          - ubuntu-20.04
+          - macos-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v2
+      - name: Test
+        run: ./runtests
+
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: msys2/setup-msys2@v2
+        with:
+          path-type: inherit
+      - name: Remove link.exe from MSYS2
+        shell: msys2 {0}
+        run: rm -f /bin/link.exe
+      - uses: actions/checkout@v2
+      - name: Test
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          msys2 -c ./runtests
