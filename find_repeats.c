@@ -119,9 +119,14 @@ typedef struct {
     size_t length;
 } OCCURRENCE;
 
-static OCCURRENCE find_longest_occurrence(const char *buf, size_t pos, size_t size, const OFFSET_MAP *map)
+static OCCURRENCE find_longest_occurrence(const char       *buf,
+                                          size_t            pos,
+                                          size_t            size,
+                                          size_t            last_offs,
+                                          const OFFSET_MAP *map)
 {
-    OCCURRENCE occurrence = { 0, 0 };
+    OCCURRENCE occurrence    = { 0, 0 };
+    size_t     same_offs_len = 0;
 
     uint32_t chunk_id = map->pair_ids[get_map_idx(buf, pos)];
 
@@ -143,6 +148,9 @@ static OCCURRENCE find_longest_occurrence(const char *buf, size_t pos, size_t si
             if (length < occurrence.length)
                 continue;
 
+            if (offset == last_offs)
+                same_offs_len = length;
+
             if (length == occurrence.length && offset > occurrence.offset)
                 continue;
 
@@ -156,6 +164,9 @@ static OCCURRENCE find_longest_occurrence(const char *buf, size_t pos, size_t si
         chunk_id = chunk->next_id;
     }
 
+    if (same_offs_len == occurrence.length)
+        occurrence.offset = last_offs;
+
     return occurrence;
 }
 
@@ -168,13 +179,17 @@ int find_repeats(const char         *buf,
     OFFSET_MAP *map;
     size_t      pos        = 0;
     size_t      num_unique = 0;
+    size_t      last_offs  = 0;
+
+    if ( ! size)
+        return 0;
 
     map = alloc_offset_map(size);
     if ( ! map)
         return 1;
 
     while (pos + 1 < size) {
-        const OCCURRENCE occurrence = find_longest_occurrence(buf, pos, size, map);
+        const OCCURRENCE occurrence = find_longest_occurrence(buf, pos, size, last_offs, map);
         size_t           i;
 
         if ( ! occurrence.length) {
@@ -191,7 +206,9 @@ int find_repeats(const char         *buf,
 
         assert(occurrence.offset > 0);
 
-        report_repeat(cookie, buf, pos, occurrence.offset - 1, occurrence.length);
+        report_repeat(cookie, buf, pos, occurrence.offset, occurrence.length);
+
+        last_offs = occurrence.offset;
 
         for (i = 0; i < occurrence.length; ++i) {
             if (pos + 1 < size)

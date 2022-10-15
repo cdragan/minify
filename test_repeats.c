@@ -11,7 +11,7 @@
 enum WHAT {
     w_end,
     w_unique,
-    w_repeat
+    w_REPEAT
 };
 
 typedef struct {
@@ -33,7 +33,7 @@ static const char *what_str(enum WHAT what)
     switch (what) {
         case w_end:    return "end";
         case w_unique: return "unique";
-        case w_repeat: return "repeat";
+        case w_REPEAT: return "repeat";
         default:       break;
     }
     assert(0);
@@ -55,7 +55,9 @@ static void test_report(void *cookie, enum WHAT what, size_t pos, size_t size, s
         return;
     }
 
-    assert(what != w_end);
+    assert(what == w_unique || what == w_REPEAT);
+
+    assert((what != w_unique) || (expect->offset == 0));
 
     if (expect->pos != pos) {
         fprintf(stderr, "test_repeats.c:%d: expected pos %zu but got %zu\n",
@@ -71,7 +73,7 @@ static void test_report(void *cookie, enum WHAT what, size_t pos, size_t size, s
         return;
     }
 
-    if (what == w_repeat && expect->offset != offset) {
+    if (what == w_REPEAT && expect->offset != offset) {
         fprintf(stderr, "test_repeats.c:%d: expected offset %zu but got %zu\n",
                 test_case->line, expect->offset, offset);
         test_case->expect = NULL;
@@ -88,7 +90,7 @@ static void report_unique_bytes(void *cookie, const char *buf, size_t pos, size_
 
 static void report_repeat(void *cookie, const char *buf, size_t pos, size_t offset, size_t size)
 {
-    test_report(cookie, w_repeat, pos, size, offset);
+    test_report(cookie, w_REPEAT, pos, size, offset);
 }
 
 static unsigned run_test(const char *buf, size_t size, int line, EXPECT *expect)
@@ -126,12 +128,101 @@ int main(void)
 {
     unsigned num_failed = 0;
 
+    /* Empty buffer */
+    {
+        static EXPECT expect[] = {
+            { w_end, 0, 0, 0 }
+        };
+        RUN_TEST("", expect);
+    }
+
+    /* One byte */
+    {
+        static EXPECT expect[] = {
+            { w_unique, 0, 1, 0 },
+            { w_end,    0, 0, 0 }
+        };
+        RUN_TEST("a", expect);
+    }
+
+    /* Three unique bytes */
     {
         static EXPECT expect[] = {
             { w_unique, 0, 3, 0 },
             { w_end,    0, 0, 0 }
         };
         RUN_TEST("abc", expect);
+    }
+
+    /* Repetition of size 1 */
+    {
+        static EXPECT expect[] = {
+            { w_unique, 0, 2, 0 },
+            { w_REPEAT, 2, 3, 1 },
+            { w_unique, 5, 1, 0 },
+            { w_end,    0, 0, 0 }
+        };
+        RUN_TEST("abbbbc", expect);
+    }
+
+    /* Repetition of size 2 */
+    {
+        static EXPECT expect[] = {
+            { w_unique, 0, 3, 0 },
+            { w_REPEAT, 3, 2, 2 },
+            { w_end,    0, 0, 0 }
+        };
+        RUN_TEST("abcbc", expect);
+    }
+
+    /* Use longest repetition */
+    {
+        static EXPECT expect[] = {
+            { w_unique,  0, 5,  0 },
+            { w_REPEAT,  5, 2,  3 },
+            { w_unique,  7, 1,  0 },
+            { w_REPEAT,  8, 2,  7 },
+            { w_unique, 10, 1,  0 },
+            { w_REPEAT, 11, 3, 10 },
+            { w_end,     0, 0,  0 }
+        };
+        RUN_TEST("0bcd1cd2bc3bcd", expect);
+    }
+
+    /* Use longest repetition */
+    {
+        static EXPECT expect[] = {
+            { w_unique, 0, 4, 0 },
+            { w_REPEAT, 4, 2, 3 },
+            { w_unique, 6, 2, 0 },
+            { w_REPEAT, 8, 3, 4 },
+            { w_end,    0, 0, 0 }
+        };
+        RUN_TEST("0bc1bcd2bcd", expect);
+    }
+
+    /* Prefer smallest offset */
+    {
+        static EXPECT expect[] = {
+            { w_unique, 0, 4, 0 },
+            { w_REPEAT, 4, 3, 4 },
+            { w_REPEAT, 7, 3, 3 },
+            { w_end,    0, 0, 0 }
+        };
+        RUN_TEST("abc abcabc", expect);
+    }
+
+    /* Prefer same offset as last time */
+    {
+        static EXPECT expect[] = {
+            { w_unique,  0, 7,  0 },
+            { w_REPEAT,  7, 3,  4 },
+            { w_REPEAT, 10, 2, 10 },
+            { w_unique, 12, 1,  0 },
+            { w_REPEAT, 13, 3, 10 },
+            { w_end,     0, 0,  0 }
+        };
+        RUN_TEST("dexabc abcdeyabc", expect);
     }
 
     if (num_failed)
