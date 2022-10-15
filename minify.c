@@ -11,8 +11,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-// Arithmetic coding: https://github.com/runestubbe/Crinkler/blob/master/source/Compressor/AritCode.cpp
-//
 // LZMA
 // 0 + byteCode	        LIT	        A single byte encoded using an adaptive binary range coder.
 // 1+0 + len + dist	MATCH	        A typical LZ77 sequence describing sequence length and distance.
