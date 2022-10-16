@@ -46,5 +46,7 @@ int main(int argc, char *argv[])
     printf("Input:  %zu bytes\n", buf.size);
     printf("Output: %zu bytes\n", actual_size);
 
+    free(buf.buf);
+
     return EXIT_SUCCESS;
 }

@@ -129,10 +129,21 @@ int main(void)
     {
         const uint8_t input[3]  = { 0xFF, 0xFF, 0x00 };
         uint8_t       output[3] = { 0xAA, 0xAA };
-        const size_t  out_size  = arith_encode(&output, 3, &input, 3, 8);
+        const size_t  out_size  = arith_encode(&output, 2, &input, 3, 8);
         TEST(out_size == 2);
         TEST(output[0] == 0xF3);
         TEST(output[1] == 0xC1);
+    }
+
+    {
+        const uint8_t input[3]  = { 0x55, 0xAA, 0x55 };
+        uint8_t       output[4] = { 0xAA, 0xAA };
+        const size_t  out_size  = arith_encode(&output, 4, &input, 3, 64);
+        TEST(out_size == 4);
+        TEST(output[0] == 0x9A);
+        TEST(output[1] == 0xA8);
+        TEST(output[2] == 0x61);
+        TEST(output[3] == 0x80);
     }
 
     return num_failed ? EXIT_FAILURE : EXIT_SUCCESS;
