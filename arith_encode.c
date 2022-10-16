@@ -9,6 +9,7 @@
 
 typedef struct {
     uint32_t prob[2];
+    uint32_t history_prev;
     uint32_t history_next;
     uint32_t window_size;
     uint8_t  history[MAX_WINDOW_SIZE * 2];
@@ -20,6 +21,7 @@ static void init_model(MODEL *model, uint32_t window_size)
 
     model->prob[0]      = 0;
     model->prob[1]      = 0;
+    model->history_prev = 0;
     model->history_next = 0;
     model->window_size  = window_size;
 }
@@ -27,21 +29,25 @@ static void init_model(MODEL *model, uint32_t window_size)
 static void update_model(MODEL *model, uint32_t bit)
 {
     const uint32_t window_size = model->window_size;
+    uint32_t       history_size;
 
     assert(bit <= 1);
 
     ++model->prob[bit];
 
-    if (model->history_next == MAX_WINDOW_SIZE * 2) {
-        const uint32_t prune_point = MAX_WINDOW_SIZE * 2 - window_size;
-        memcpy(model->history, &model->history[prune_point], window_size);
-        model->history_next = window_size;
-    }
-
     model->history[model->history_next++] = (uint8_t)bit;
 
-    if (model->history_next > window_size)
-        --model->prob[model->history[model->history_next - (window_size + 1)]];
+    model->history_next %= MAX_WINDOW_SIZE * 2;
+
+    assert(model->history_next != model->history_prev);
+    history_size = model->history_next - model->history_prev;
+    if (model->history_next < model->history_prev)
+        history_size += MAX_WINDOW_SIZE * 2;
+
+    if (history_size > window_size) {
+        --model->prob[model->history[model->history_prev]];
+        model->history_prev = (model->history_prev + 1) % (MAX_WINDOW_SIZE * 2);
+    }
 }
 
 typedef struct {
