@@ -8,11 +8,13 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 int main(int argc, char *argv[])
 {
     BUFFER buf;
     char  *dest;
+    char  *decoded;
     char  *end = NULL;
     long   window_size;
     size_t dest_size;
@@ -38,6 +40,7 @@ int main(int argc, char *argv[])
     dest      = (char *)malloc(dest_size);
     if ( ! dest) {
         perror(NULL);
+        free(buf.buf);
         return EXIT_FAILURE;
     }
 
@@ -46,7 +49,24 @@ int main(int argc, char *argv[])
     printf("Input:  %zu bytes\n", buf.size);
     printf("Output: %zu bytes\n", actual_size);
 
+    decoded = (char *)malloc(buf.size);
+    if ( ! decoded) {
+        perror(NULL);
+        free(buf.buf);
+        return EXIT_FAILURE;
+    }
+
+    arith_decode(decoded, buf.size, dest, actual_size, (uint32_t)window_size);
+
+    if (memcmp(buf.buf, decoded, buf.size)) {
+        fprintf(stderr, "Decoded data doesn't match original!\n");
+        free(buf.buf);
+        free(decoded);
+        return EXIT_FAILURE;
+    }
+
     free(buf.buf);
+    free(decoded);
 
     return EXIT_SUCCESS;
 }

@@ -19,8 +19,8 @@ static void init_model(MODEL *model, uint32_t window_size)
 {
     assert(window_size <= MAX_WINDOW_SIZE);
 
-    model->prob[0]      = 0;
-    model->prob[1]      = 0;
+    model->prob[0]      = 1;
+    model->prob[1]      = 1;
     model->history_prev = 0;
     model->history_next = 0;
     model->window_size  = window_size;
@@ -101,8 +101,8 @@ static void init_encoder(ENCODER *encoder, void *dest, size_t size, uint32_t win
 
 static void encode_bit(ENCODER *encoder, uint32_t bit)
 {
-    const uint32_t prob0 = encoder->model.prob[0] + 1;
-    const uint32_t prob1 = encoder->model.prob[1] + 1;
+    const uint32_t prob0 = encoder->model.prob[0];
+    const uint32_t prob1 = encoder->model.prob[1];
 
     const uint64_t range = (uint64_t)encoder->high - (uint64_t)encoder->low + 1;
     const uint32_t mid   = (uint32_t)((range * prob0) / (prob0 + prob1));
@@ -116,7 +116,7 @@ static void encode_bit(ENCODER *encoder, uint32_t bit)
 
     for (;;) {
         if (encoder->high < 0x80000000U || encoder->low >= 0x80000000U) {
-            uint32_t out_bit = (encoder->high >= 0x80000000U) ? 1 : 0;
+            uint32_t out_bit = (encoder->low >= 0x80000000U) ? 1 : 0;
 
             emit_bit(&encoder->emit, out_bit);
 
@@ -128,8 +128,8 @@ static void encode_bit(ENCODER *encoder, uint32_t bit)
         }
         else if (encoder->low >= 0x40000000U && encoder->high < 0xC0000000U) {
             ++encoder->num_pending;
-            encoder->low  -= 0x40000000U;
-            encoder->high -= 0x40000000U;
+            encoder->low  &= ~0x40000000U;
+            encoder->high |= 0x40000000U;
         }
         else
             break;
@@ -148,10 +148,7 @@ static void emit_tail(ENCODER *encoder)
     out_bit ^= 1;
 
     /* Emit only one bit, decoder will duplicate last bit */
-    if (encoder->num_pending) {
-        emit_bit(&encoder->emit, out_bit);
-        encoder->num_pending = 0;
-    }
+    emit_bit(&encoder->emit, out_bit);
 
     /* Emit last byte */
     while (encoder->emit.data != 1)
@@ -183,8 +180,122 @@ size_t arith_encode(void *dest, size_t max_dest_size, const void *src, size_t si
     return get_dest_size(&encoder.emit, dest);
 }
 
-size_t arith_decode(void *dest, const void *src, size_t size)
+typedef struct {
+    const uint8_t *next_byte;
+    size_t         bytes_left;
+    uint32_t       data;
+} BIT_PULLER;
+
+static void init_bit_puller(BIT_PULLER *bit_puller, const void *src, size_t src_size)
 {
-    /* TODO */
-    return 0;
+    assert(src_size > 0);
+
+    bit_puller->data       = 0x100U | *(const uint8_t *)src;
+    bit_puller->next_byte  = (const uint8_t *)src + 1;
+    bit_puller->bytes_left = src_size - 1;
+}
+
+static uint32_t pull_bits(BIT_PULLER *bit_puller, int bits)
+{
+    uint32_t out_value = 0;
+    uint32_t in_data   = bit_puller->data;
+
+    do {
+        out_value = (out_value << 1) | ((in_data >> 7) & 1);
+        in_data   <<= 1;
+        --bits;
+
+        if (in_data >= 0x10000U) {
+            if (bit_puller->bytes_left) {
+                in_data = 0x100U | *(bit_puller->next_byte++);
+                --bit_puller->bytes_left;
+            }
+            else
+                /* Duplicate last bit */
+                in_data >>= 1;
+        }
+    } while (bits);
+
+    bit_puller->data = in_data;
+
+    return out_value;
+}
+
+typedef struct {
+    MODEL      model;
+    BIT_PULLER bit_puller;
+    uint32_t   low;
+    uint32_t   high;
+    uint32_t   value;
+} DECODER;
+
+static void init_decoder(DECODER *decoder, const void *src, size_t src_size, uint32_t window_size)
+{
+    init_model(&decoder->model, window_size);
+    init_bit_puller(&decoder->bit_puller, src, src_size);
+    decoder->low   = 0;
+    decoder->high  = ~0U;
+    decoder->value = pull_bits(&decoder->bit_puller, 32);
+}
+
+static uint8_t decode_next_bit(DECODER *decoder)
+{
+    const uint32_t prob0 = decoder->model.prob[0];
+    const uint32_t prob1 = decoder->model.prob[1];
+
+    const uint64_t range = (uint64_t)decoder->high - (uint64_t)decoder->low + 1;
+    const uint32_t mid   = (uint32_t)((range * prob0) / (prob0 + prob1));
+
+    const uint8_t out_bit = decoder->value >= decoder->low + mid;
+
+    update_model(&decoder->model, out_bit);
+
+    if (out_bit)
+        decoder->low += mid;
+    else
+        decoder->high = decoder->low + mid - 1;
+
+    for (;;) {
+        if (decoder->high < 0x80000000U || decoder->low >= 0x80000000U) {
+        }
+        else if (decoder->low >= 0x40000000U && decoder->high < 0xC0000000U) {
+            decoder->value -= 0x40000000U;
+            decoder->low   &= ~0x40000000U;
+            decoder->high  |= 0x40000000U;
+        }
+        else
+            break;
+
+        decoder->low   = decoder->low << 1;
+        decoder->high  = (decoder->high << 1) + 1;
+        decoder->value = (decoder->value << 1) + pull_bits(&decoder->bit_puller, 1);
+    }
+
+    return out_bit;
+}
+
+void arith_decode(void *dest, size_t dest_size, const void *src, size_t src_size, uint32_t window_size)
+{
+    BIT_PULLER bit_puller;
+    DECODER    decoder;
+
+    if ( ! dest_size)
+        return;
+
+    assert(src_size);
+
+    init_decoder(&decoder, src, src_size, window_size);
+
+    for (; dest_size; --dest_size) {
+
+        int     bit;
+        uint8_t out_byte = 0;
+
+        for (bit = 0; bit < 8; bit++)
+            out_byte |= decode_next_bit(&decoder) << bit;
+
+        *(uint8_t *)dest = out_byte;
+
+        dest = (uint8_t *)dest + 1;
+    }
 }
