@@ -118,6 +118,19 @@ static void emit_size(COMPRESS *compress, size_t size)
     }
 }
 
+static int count_bits(unsigned int value)
+{
+#if defined(__GNUC__) || defined(__clang__)
+    return __builtin_clz(value);
+#elif defined(_MSC_VER)
+    unsigned long bit;
+
+    _BitScanReverse(&bit, value);
+
+    return (int)bit;
+#endif
+}
+
 static void emit_offset(COMPRESS *compress, size_t offset)
 {
     // LZ77 distance encoding:
@@ -144,7 +157,7 @@ static void emit_offset(COMPRESS *compress, size_t offset)
     if (offset < 2)
         emit_bits(&compress->emitter, offset, 6);
     else {
-        const int bits_m1 = 31 - __builtin_clz((unsigned int)offset);
+        const int bits_m1 = 31 - count_bits((unsigned int)offset);
 
         offset &= ~((size_t)1 << bits_m1);
 
