@@ -4,6 +4,7 @@
 
 #include "find_repeats.h"
 #include "load_file.h"
+#include "arith_encode.h"
 
 #include <assert.h>
 #include <stdint.h>
@@ -19,148 +20,191 @@
 // 1+1+1+0 + len	LONGREP[1]	An LZ77 sequence. Distance is equal to the second last used LZ77 distance.
 // 1+1+1+1+0 + len	LONGREP[2]	An LZ77 sequence. Distance is equal to the third last used LZ77 distance.
 // 1+1+1+1+1 + len	LONGREP[3]	An LZ77 sequence. Distance is equal to the fourth last used LZ77 distance.
-//
-// Streams
-// - unique/repeat (1 bit)
-// - repeat reuse offset/size (2 bits)
-// - unique lengths
-// - unique data
-// - repeat lengths
-// - repeat offsets
-//
-// Statistically, length tends to be mostly below 256, so few bits are needed to encode it
-//
-// LZ77 length encoding:
-// 0+ 3 bits	The length encoded using 3 bits, gives the lengths range from 2 to 9.
-// 1+0+ 3 bits	The length encoded using 3 bits, gives the lengths range from 10 to 17.
-// 1+1+ 8 bits	The length encoded using 8 bits, gives the lengths range from 18 to 273.
-// 
-// LZ77 distance encoding:
-// 6-bit distance slot  Highest 2 bits  Fixed 0.5 prob bits     Context encoded bits
-// 0	                00	        0	                0
-// 1	                01	        0	                0
-// 2	                10	        0	                0
-// 3	                11	        0	                0
-// 4	                10	        0	                1
-// 5	                11	        0	                1
-// 6	                10	        0	                2
-// 7	                11	        0	                2
-// 8	                10	        0	                3
-// 9	                11	        0	                3
-// 10	                10	        0	                4
-// 11	                11	        0	                4
-// 12	                10	        0	                5
-// 13	                11	        0	                5
-// 14–62 (even)	        10	        ((slot / 2) − 5)	4
-// 15–63 (odd)	        11	        (((slot − 1) / 2) − 5)	4
-// 
 
-static size_t total_unique    = 0;
-static size_t total_unique_16 = 0;
-static size_t unique_seq      = 0;
+typedef struct {
+    char    *buf;
+    char    *begin;
+    char    *end;
+    uint32_t data;
+} EMITTER;
+
+static void init_emitter(EMITTER *emitter, char *buf, size_t size)
+{
+    emitter->buf   = buf;
+    emitter->begin = buf;
+    emitter->end   = buf + size;
+    emitter->data  = 1;
+}
+
+static void emit_bits(EMITTER *emitter, size_t value, int bits)
+{
+    assert(bits);
+
+    do {
+        const uint8_t bit = (uint8_t)((value >> --bits) & 1U);
+
+        emitter->data = (emitter->data << 1) | bit;
+
+        if (emitter->data > 0xFFU) {
+            assert(emitter->buf < emitter->end);
+
+            *(emitter->buf++) = (char)(uint8_t)emitter->data;
+            emitter->data     = 1;
+        }
+    } while (bits);
+}
+
+static void emit_tail(EMITTER *emitter)
+{
+    /* Duplicate last bit */
+    const uint32_t last_bit = (emitter->data & 1U) * 0x7FU;
+
+    /* Emit 7 bits, which is enough to force out the last byte, but won't emit a byte unnecessarily */
+    emit_bits(emitter, last_bit, 7);
+}
+
+typedef struct {
+    EMITTER emitter;
+    size_t  last_size;
+} COMPRESS;
+
+static void init_compress(COMPRESS *compress, char *buf, size_t size)
+{
+    init_emitter(&compress->emitter, buf, size);
+    compress->last_size = 0;
+}
+
+static size_t finish_compress(COMPRESS *compress)
+{
+    emit_tail(&compress->emitter);
+
+    return (size_t)(compress->emitter.buf - compress->emitter.begin);
+}
+
+enum PACKET_TYPE {
+    TYPE_UNIQUE           = 0, /* 0 */
+    TYPE_REPEAT           = 2, /* 10 */
+    TYPE_REPEAT_SAME_SIZE = 3  /* 11 */
+};
+
+static void emit_type(COMPRESS *compress, enum PACKET_TYPE type)
+{
+    emit_bits(&compress->emitter, (size_t)type, (type == TYPE_UNIQUE) ? 1 : 2);
+}
+
+static void emit_size(COMPRESS *compress, size_t size)
+{
+    // Statistically, length tends to be mostly below 256, so few bits are needed to encode it
+    //
+    // LZ77 length encoding:
+    // 0+ 3 bits	The length encoded using 3 bits, gives the lengths range from 2 to 9.
+    // 1+0+ 3 bits	The length encoded using 3 bits, gives the lengths range from 10 to 17.
+    // 1+1+ 8 bits	The length encoded using 8 bits, gives the lengths range from 18 to 273.
+
+    assert(size >= 2);
+    assert(size <= 273);
+
+    if (size <= 9) {
+        emit_bits(&compress->emitter, 0, 1);
+        emit_bits(&compress->emitter, size - 2, 3);
+    }
+    else if (size <= 17) {
+        emit_bits(&compress->emitter, 2, 2);
+        emit_bits(&compress->emitter, size - 10, 3);
+    }
+    else {
+        emit_bits(&compress->emitter, 3, 2);
+        emit_bits(&compress->emitter, size - 18, 8);
+    }
+}
+
+static void emit_offset(COMPRESS *compress, size_t offset)
+{
+    // LZ77 distance encoding:
+    // * 6-bit distance slot
+    // * Followed by a variable number of bits, depending on the value of the slot
+    //
+    // 6-bit distance slot  Highest 2 bits  Context encoded bits
+    // 0	            00	            0
+    // 1	            01	            0
+    // 2–62 (even)	    10	            ((slot / 2) − 1)
+    // 3–63 (odd)	    11	            (((slot − 1) / 2) − 1)
+    //
+    // Bits   6-bit distance slot   Context encoded bits
+    // 2      00001x                0
+    // 3      00010x                1
+    // 4      00011x                2
+    // 5      00100x                3
+    // 6      00101x                4
+    // :      :::                   :
+    // 32     11111x                30
+
+    assert((sizeof(offset) <= 4) || (offset <= ~0U));
+
+    if (offset < 2)
+        emit_bits(&compress->emitter, offset, 6);
+    else {
+        const int bits_m1 = 31 - __builtin_clz((unsigned int)offset);
+
+        offset &= ~((size_t)1 << bits_m1);
+
+        offset |= bits_m1 << bits_m1;
+
+        emit_bits(&compress->emitter, offset, bits_m1 + 5);
+    }
+}
+
+static void emit_unique_bytes(COMPRESS *compress, const uint8_t *buf, size_t size)
+{
+    const uint8_t *const end = buf + size;
+
+    do {
+        emit_bits(&compress->emitter, *buf, 8);
+    } while (++buf < end);
+}
 
 static void report_unique_bytes(void *cookie, const char *buf, size_t pos, size_t size)
 {
-    char   sample[15];
-    char  *out = sample;
-    size_t i;
+    COMPRESS *const compress = (COMPRESS *)cookie;
 
-    if (size == 0)
-        *out = 0;
-    else {
-        *(out++) = ' ';
-        *(out++) = '-';
-    }
+    do {
+        const size_t chunk_size = size > 272 ? 272 : size;
 
-    for (i = 0; i < size && i < 4; i++) {
-        int          num_printed;
-        const size_t num_left = &sample[sizeof(sample)] - out;
-        assert(num_left > 3);
-        assert(num_left < sizeof(sample));
+        emit_type(compress, TYPE_UNIQUE);
+        emit_size(compress, chunk_size + 1);
+        emit_unique_bytes(compress, (const uint8_t *)&buf[pos], chunk_size);
 
-        num_printed = snprintf(out, num_left, " %02x", (uint8_t)buf[pos + i]);
-        out += num_printed;
-    }
-
-    ++unique_seq;
-    total_unique += size;
-    if (size < 16)
-        ++total_unique_16;
-
-    printf("@%zu unique %zu%s\n", pos, size, sample);
+        size -= chunk_size;
+    } while (size);
 }
-
-static size_t repeat_seq = 0;
-static size_t offs_1     = 0;
-static size_t offs_2     = 0;
-static size_t offs_8     = 0;
-static size_t offs_16    = 0;
-static size_t offs_256   = 0;
-static size_t offs_4096  = 0;
-static size_t offs_large = 0;
-static size_t size_2     = 0;
-static size_t size_3     = 0;
-static size_t size_8     = 0;
-static size_t size_16    = 0;
-static size_t size_256   = 0;
-static size_t size_4096  = 0;
-static size_t size_large = 0;
-static size_t same_offs_size = 0;
-static size_t same_size  = 0;
-static size_t same_offs  = 0;
 
 static void report_repeat(void *cookie, const char *buf, size_t pos, size_t offset, size_t size)
 {
-    ++repeat_seq;
-    if (offset == 0)
-        ++offs_1;
-    else if (offset == 1)
-        ++offs_2;
-    else if (offset < 7)
-        ++offs_8;
-    else if (offset < 15)
-        ++offs_16;
-    else if (offset < 255)
-        ++offs_256;
-    else if (offset < 4095)
-        ++offs_4096;
-    else
-        ++offs_large;
-    if (size == 2)
-        ++size_2;
-    else if (size == 3)
-        ++size_3;
-    else if (size < 8)
-        ++size_8;
-    else if (size < 16)
-        ++size_16;
-    else if (size < 256)
-        ++size_256;
-    else if (size < 4096)
-        ++size_4096;
-    else
-        ++size_large;
+    COMPRESS *const compress = (COMPRESS *)cookie;
 
-    static size_t last_offset = ~0U;
-    static size_t last_size   = ~0U;
+    do {
+        const size_t chunk_size = size > 273 ? 273 : size;
 
-    if (size == last_size) {
-        if (offset == last_offset)
-            ++same_offs_size;
-        else
-            ++same_size;
-    }
-    else if (offset == last_offset)
-        ++same_offs;
-    last_offset = offset;
-    last_size   = size;
+        emit_type(compress, (chunk_size == compress->last_size) ? TYPE_REPEAT_SAME_SIZE : TYPE_REPEAT);
 
-    printf("@%zu repeat %zu offs %zu\n", pos, size, offset + 1);
+        if (chunk_size != compress->last_size)
+            emit_size(compress, chunk_size);
+        compress->last_size = chunk_size;
+
+        emit_offset(compress, offset);
+
+        size -= chunk_size;
+    } while (size);
 }
 
 int main(int argc, char *argv[])
 {
-    BUFFER buf;
+    COMPRESS compress;
+    BUFFER   buf;
+    char    *dest;
+    char    *entropy;
+    size_t   dest_size;
+    size_t   entropy_size;
 
     if (argc != 2) {
         fprintf(stderr, "Error: Invalid arguments\n");
@@ -172,31 +216,28 @@ int main(int argc, char *argv[])
     if ( ! buf.size)
         return EXIT_FAILURE;
 
-    if (find_repeats(buf.buf, buf.size, report_unique_bytes, report_repeat, NULL))
+    dest_size = buf.size * 231 / 100; /* +10% and then +10% on top of it */
+    dest = (char *)malloc(dest_size);
+    if ( ! dest) {
+        perror(NULL);
+        return EXIT_FAILURE;
+    }
+
+    entropy = dest + buf.size * 110 / 100;
+    dest_size = buf.size * 110 / 100; /* +10% */
+
+    init_compress(&compress, dest, dest_size);
+
+    if (find_repeats(buf.buf, buf.size, report_unique_bytes, report_repeat, &compress))
         return EXIT_FAILURE;
 
-    printf("file size                  %zu\n", buf.size);
-    printf("total unique bytes         %zu\n", total_unique);
-    printf("total unique bytes <16 len %zu\n", total_unique_16);
-    printf("unique sequences           %zu\n", unique_seq);
-    printf("repeat sequences           %zu\n", repeat_seq);
-    printf("offset==1                  %zu\n", offs_1);
-    printf("offset==2                  %zu\n", offs_2);
-    printf("offset<8                   %zu\n", offs_8);
-    printf("offset<16                  %zu\n", offs_16);
-    printf("offset<256                 %zu\n", offs_256);
-    printf("offset<4096                %zu\n", offs_4096);
-    printf("offset>=4096               %zu\n", offs_large);
-    printf("size==2                    %zu\n", size_2);
-    printf("size==3                    %zu\n", size_3);
-    printf("size<8                     %zu\n", size_8);
-    printf("size<16                    %zu\n", size_16);
-    printf("size<256                   %zu\n", size_256);
-    printf("size<4096                  %zu\n", size_4096);
-    printf("size>=4096                 %zu\n", size_large);
-    printf("same repeat and offs       %zu\n", same_offs_size);
-    printf("same repeat                %zu\n", same_size);
-    printf("same offs                  %zu\n", same_offs);
+    dest_size = finish_compress(&compress);
+
+    entropy_size = arith_encode(entropy, buf.size * 121 / 100, dest, dest_size, 256);
+
+    printf("Original: %zu bytes\n", buf.size);
+    printf("LZ77:     %zu bytes\n", dest_size);
+    printf("Entropy:  %zu bytes\n", entropy_size);
 
     return EXIT_SUCCESS;
 }

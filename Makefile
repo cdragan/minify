@@ -8,6 +8,7 @@ targets += minify
 minify_src_files += minify.c
 minify_src_files += find_repeats.c
 minify_src_files += load_file.c
+minify_src_files += arith_encode.c
 
 targets += arith_encoder
 arith_encoder_src_files += arith_encode_file.c
