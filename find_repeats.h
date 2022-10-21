@@ -5,8 +5,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
+typedef struct {
+    size_t offset;
+    size_t length;
+    int    last;
+} OCCURRENCE;
+
 typedef void (* REPORT_UNIQUE_BYTES)(void *cookie, const char *buf, size_t pos, size_t size);
-typedef void (* REPORT_REPEAT      )(void *cookie, const char *buf, size_t pos, size_t offset, size_t size);
+typedef void (* REPORT_REPEAT      )(void *cookie, const char *buf, size_t pos, OCCURRENCE occurrence);
 
 int find_repeats(const char         *buf,
                  size_t              size,

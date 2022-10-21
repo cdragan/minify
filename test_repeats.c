@@ -88,9 +88,9 @@ static void report_unique_bytes(void *cookie, const char *buf, size_t pos, size_
     test_report(cookie, w_unique, pos, size, 0);
 }
 
-static void report_repeat(void *cookie, const char *buf, size_t pos, size_t offset, size_t size)
+static void report_repeat(void *cookie, const char *buf, size_t pos, OCCURRENCE occurrence)
 {
-    test_report(cookie, w_REPEAT, pos, size, offset);
+    test_report(cookie, w_REPEAT, pos, occurrence.length, occurrence.offset);
 }
 
 static unsigned run_test(const char *buf, size_t size, int line, EXPECT *expect)

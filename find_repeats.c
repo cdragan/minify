@@ -114,19 +114,13 @@ static uint32_t compare(const char *buf, size_t left_pos, size_t right_pos, size
     return (uint32_t)(left - (buf + left_pos));
 }
 
-typedef struct {
-    size_t offset;
-    size_t length;
-} OCCURRENCE;
-
 static OCCURRENCE find_longest_occurrence(const char       *buf,
                                           size_t            pos,
                                           size_t            size,
-                                          size_t            last_offs,
+                                          size_t            last_offs[],
                                           const OFFSET_MAP *map)
 {
-    OCCURRENCE occurrence    = { 0, 0 };
-    size_t     same_offs_len = 0;
+    OCCURRENCE occurrence = { 0, 0, -1 };
 
     uint32_t chunk_id = map->pair_ids[get_map_idx(buf, pos)];
 
@@ -137,6 +131,7 @@ static OCCURRENCE find_longest_occurrence(const char       *buf,
         for (i = 0; i < MAX_OFFSETS; i++) {
             uint32_t length;
             uint32_t offset;
+            int      last;
 
             const uint32_t old_pos = chunk->offset[i];
             if (old_pos == INVALID_ID)
@@ -148,26 +143,63 @@ static OCCURRENCE find_longest_occurrence(const char       *buf,
             if (length < occurrence.length)
                 continue;
 
-            if (offset == last_offs)
-                same_offs_len = length;
+            for (last = 3; last >= 0; --last)
+                if (offset == last_offs[last])
+                    break;
 
-            if (length == occurrence.length && offset > occurrence.offset)
+            if (length == occurrence.length && (last < occurrence.last || offset > occurrence.offset))
                 continue;
 
-            if (length == 2 && offset >= 256)
-                continue;
+            if (last < 0) {
+                if (length == 2 && offset > (1U << 6))
+                    continue;
+
+                if (length == 3 && offset > (1U << 11))
+                    continue;
+
+                if (length == 4 && offset > (1U << 13))
+                    continue;
+            }
 
             occurrence.length = length;
             occurrence.offset = offset;
+            occurrence.last   = last;
         }
 
         chunk_id = chunk->next_id;
     }
 
-    if (same_offs_len == occurrence.length)
-        occurrence.offset = last_offs;
-
     return occurrence;
+}
+
+static void report_unique_or_single_repeat(const char         *buf,
+                                           size_t              pos,
+                                           size_t              size,
+                                           size_t              last_offs,
+                                           REPORT_UNIQUE_BYTES report_unique_bytes,
+                                           REPORT_REPEAT       report_repeat,
+                                           void               *cookie)
+{
+    size_t       num_unique = 0;
+    const size_t end        = pos + size;
+
+    for ( ; pos < end; ++pos) {
+        if (last_offs && buf[pos] == buf[pos - last_offs]) {
+            OCCURRENCE occurrence = { last_offs, 1, 3 };
+
+            if (num_unique) {
+                report_unique_bytes(cookie, buf, pos - num_unique, num_unique);
+                num_unique = 0;
+            }
+
+            report_repeat(cookie, buf, pos, occurrence);
+        }
+        else
+            ++num_unique;
+    }
+
+    if (num_unique)
+        report_unique_bytes(cookie, buf, pos - num_unique, num_unique);
 }
 
 int find_repeats(const char         *buf,
@@ -177,9 +209,9 @@ int find_repeats(const char         *buf,
                  void               *cookie)
 {
     OFFSET_MAP *map;
-    size_t      pos        = 0;
-    size_t      num_unique = 0;
-    size_t      last_offs  = 0;
+    size_t      pos          = 0;
+    size_t      num_unique   = 0;
+    size_t      last_offs[4] = { 0, 0, 0, 0 };
 
     if ( ! size)
         return 0;
@@ -189,8 +221,9 @@ int find_repeats(const char         *buf,
         return 1;
 
     while (pos + 1 < size) {
-        const OCCURRENCE occurrence = find_longest_occurrence(buf, pos, size, last_offs, map);
-        size_t           i;
+        OCCURRENCE occurrence = find_longest_occurrence(buf, pos, size, last_offs, map);
+        size_t     i;
+        size_t     rel_offs;
 
         if ( ! occurrence.length) {
             set_offset(buf, pos, map);
@@ -200,16 +233,47 @@ int find_repeats(const char         *buf,
         }
 
         if (num_unique) {
-            report_unique_bytes(cookie, buf, pos - num_unique, num_unique);
+            report_unique_or_single_repeat(buf, pos - num_unique, num_unique, last_offs[3],
+                                           report_unique_bytes, report_repeat, cookie);
             num_unique = 0;
         }
 
         assert(occurrence.offset > 0);
 
-        report_repeat(cookie, buf, pos, occurrence.offset, occurrence.length);
+        rel_offs = 0;
+        do {
+            const size_t full_length = occurrence.length;
+            const size_t num_left    = full_length - rel_offs;
 
-        last_offs = occurrence.offset;
+            occurrence.length = (num_left > 273) ? 273 : num_left;
 
+            report_repeat(cookie, buf, pos + rel_offs, occurrence);
+
+            /* Append offset to the list of last 4 offsets */
+            if (occurrence.last < 0) {
+                for (i = 0; i < 3; i++)
+                    last_offs[i] = last_offs[i + 1];
+
+                last_offs[3]    = occurrence.offset;
+                occurrence.last = 3;
+            }
+
+            rel_offs         += occurrence.length;
+            occurrence.length = full_length;
+        } while (rel_offs < occurrence.length);
+
+        /* Append offset to the list of last 4 offsets, but without duplicates */
+        for (i = 0; i < 4; i++) {
+            if (last_offs[i] == occurrence.offset)
+                break;
+        }
+        if (i == 4)
+            i = 0;
+        for ( ; i < 3; i++)
+            last_offs[i] = last_offs[i + 1];
+        last_offs[3] = occurrence.offset;
+
+        /* Update lookup table with byte pair at every position */
         for (i = 0; i < occurrence.length; ++i) {
             if (pos + 1 < size)
                 set_offset(buf, pos, map);
@@ -224,7 +288,8 @@ int find_repeats(const char         *buf,
     }
 
     if (num_unique)
-        report_unique_bytes(cookie, buf, pos - num_unique, num_unique);
+        report_unique_or_single_repeat(buf, pos - num_unique, num_unique, last_offs[3],
+                                       report_unique_bytes, report_repeat, cookie);
 
     free(map);
 
