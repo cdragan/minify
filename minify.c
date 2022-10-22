@@ -56,9 +56,15 @@ static void emit_tail(EMITTER *emitter)
 
 typedef struct {
     EMITTER  type_emitter;
-    EMITTER  unique_emitter;
+    EMITTER  literal_emitter;
     EMITTER  size_emitter;
     EMITTER  offset_emitter;
+
+    size_t   type_buf_size;
+    size_t   literal_buf_size;
+    size_t   size_buf_size;
+    size_t   offset_buf_size;
+
     unsigned stats_lit;
     unsigned stats_match;
     unsigned stats_shortrep;
@@ -67,49 +73,45 @@ typedef struct {
 
 static void init_compress(COMPRESS *compress, char *buf, size_t size)
 {
-    init_emitter(&compress->type_emitter,   buf,                size / 4);
-    init_emitter(&compress->unique_emitter, buf + size / 4,     size / 4);
-    init_emitter(&compress->size_emitter,   buf + size / 2,     size / 4);
-    init_emitter(&compress->offset_emitter, buf + 3 * size / 4, size / 4);
+    memset(compress, 0, sizeof(*compress));
 
-    compress->stats_lit        = 0;
-    compress->stats_match      = 0;
-    compress->stats_shortrep   = 0;
-    compress->stats_longrep[0] = 0;
-    compress->stats_longrep[1] = 0;
-    compress->stats_longrep[2] = 0;
-    compress->stats_longrep[3] = 0;
+    init_emitter(&compress->type_emitter,    buf,                size / 4);
+    init_emitter(&compress->literal_emitter, buf + size / 4,     size / 4);
+    init_emitter(&compress->size_emitter,    buf + size / 2,     size / 4);
+    init_emitter(&compress->offset_emitter , buf + 3 * size / 4, size / 4);
 }
 
 static size_t finish_compress(COMPRESS *compress)
 {
-    char  *buf;
-    size_t type_buf_size;
-    size_t unique_buf_size;
-    size_t size_buf_size;
-    size_t offset_buf_size;
+    char *buf;
 
     emit_tail(&compress->type_emitter);
-    emit_tail(&compress->unique_emitter);
+    emit_tail(&compress->literal_emitter);
     emit_tail(&compress->size_emitter);
     emit_tail(&compress->offset_emitter);
 
-    type_buf_size   = (size_t)(compress->type_emitter.buf   - compress->type_emitter.begin);
-    unique_buf_size = (size_t)(compress->unique_emitter.buf - compress->unique_emitter.begin);
-    size_buf_size   = (size_t)(compress->size_emitter.buf   - compress->size_emitter.begin);
-    offset_buf_size = (size_t)(compress->offset_emitter.buf - compress->offset_emitter.begin);
+    compress->type_buf_size    = (size_t)(compress->type_emitter.buf    - compress->type_emitter.begin);
+    compress->literal_buf_size = (size_t)(compress->literal_emitter.buf - compress->literal_emitter.begin);
+    compress->size_buf_size    = (size_t)(compress->size_emitter.buf    - compress->size_emitter.begin);
+    compress->offset_buf_size  = (size_t)(compress->offset_emitter.buf  - compress->offset_emitter.begin);
 
     buf = compress->type_emitter.begin;
 
-    memmove(buf + type_buf_size, compress->unique_emitter.begin, unique_buf_size);
-    memmove(buf + type_buf_size + unique_buf_size, compress->size_emitter.begin, size_buf_size);
-    memmove(buf + type_buf_size + unique_buf_size + size_buf_size, compress->offset_emitter.begin, offset_buf_size);
+    memmove(buf + compress->type_buf_size,
+            compress->literal_emitter.begin, compress->literal_buf_size);
+    memmove(buf + compress->type_buf_size + compress->literal_buf_size,
+            compress->size_emitter.begin, compress->size_buf_size);
+    memmove(buf + compress->type_buf_size + compress->literal_buf_size + compress->size_buf_size,
+            compress->offset_emitter.begin, compress->offset_buf_size);
 
-    return type_buf_size + unique_buf_size + size_buf_size + offset_buf_size;
+    return compress->type_buf_size +
+           compress->literal_buf_size +
+           compress->size_buf_size +
+           compress->offset_buf_size;
 }
 
-/* LZMA
- * 0 + byte             LIT         A single unique/original byte.
+/* LZMA packets
+ * 0 + byte             LIT         A single literal/original byte.
  * 1+0 + size + offset  MATCH       Repeated sequence with size and offset.
  * 1+1+0+0              SHORTREP    Repeated sequence, size=1, offset equal to the last used offset.
  * 1+1+0+1 + size       LONGREP[0]  Repeated sequence, offset is equal to the last used offset.
@@ -240,30 +242,30 @@ static void emit_offset(COMPRESS *compress, size_t offset)
     }
 }
 
-static void emit_unique_bytes(COMPRESS *compress, const uint8_t *buf, size_t size)
+static void emit_literal(COMPRESS *compress, const uint8_t *buf, size_t size)
 {
     const uint8_t *const end = buf + size;
 
-    EMITTER *const emitter = &compress->unique_emitter;
+    EMITTER *const emitter = &compress->literal_emitter;
 
     do {
         emit_bits(emitter, *buf, 8);
     } while (++buf < end);
 }
 
-static void report_unique_bytes(void *cookie, const char *buf, size_t pos, size_t size)
+static void report_literal(void *cookie, const char *buf, size_t pos, size_t size)
 {
     COMPRESS *const compress = (COMPRESS *)cookie;
 
     do {
         emit_type(compress, TYPE_LIT);
-        emit_unique_bytes(compress, (const uint8_t *)&buf[pos], 1);
+        emit_literal(compress, (const uint8_t *)&buf[pos], 1);
         ++pos;
         --size;
     } while (size);
 }
 
-static void report_repeat(void *cookie, const char *buf, size_t pos, OCCURRENCE occurrence)
+static void report_match(void *cookie, const char *buf, size_t pos, OCCURRENCE occurrence)
 {
     COMPRESS *const compress = (COMPRESS *)cookie;
 
@@ -302,11 +304,22 @@ static void report_repeat(void *cookie, const char *buf, size_t pos, OCCURRENCE 
     }
 }
 
+static void decompress(char       *dest,
+                       size_t      dest_size,
+                       const char *compressed,
+                       size_t      type_buf_size,
+                       size_t      literal_buf_size,
+                       size_t      size_buf_size,
+                       size_t      offset_buf_size)
+{
+}
+
 int main(int argc, char *argv[])
 {
     COMPRESS compress;
     BUFFER   buf;
     char    *dest;
+    char    *decompressed;
     char    *entropy;
     size_t   dest_size;
     size_t   entropy_size;
@@ -321,7 +334,7 @@ int main(int argc, char *argv[])
     if ( ! buf.size)
         return EXIT_FAILURE;
 
-    dest_size = buf.size * 510 / 100;
+    dest_size = buf.size * (110 + 400 + 100) / 100;
     dest = (char *)malloc(dest_size);
     if ( ! dest) {
         perror(NULL);
@@ -330,27 +343,46 @@ int main(int argc, char *argv[])
 
     entropy = dest + buf.size * 110 / 100;
     dest_size = buf.size * 110 / 100;
+    decompressed = dest + buf.size * (110 + 400) / 100;
 
     init_compress(&compress, dest, dest_size);
 
-    if (find_repeats(buf.buf, buf.size, report_unique_bytes, report_repeat, &compress))
+    if (find_repeats(buf.buf, buf.size, report_literal, report_match, &compress))
         return EXIT_FAILURE;
 
     dest_size = finish_compress(&compress);
 
+    decompress(decompressed,
+               buf.size,
+               dest,
+               compress.type_buf_size,
+               compress.literal_buf_size,
+               compress.size_buf_size,
+               compress.offset_buf_size);
+
+#if 0
+    if (memcmp(dest, decompressed, buf.size)) {
+        fprintf(stderr, "Decompressed output doesn't match input data\n");
+        return EXIT_FAILURE;
+    }
+#endif
+
     entropy_size = arith_encode(entropy, buf.size * 400 / 100, dest, dest_size, 128);
 
-    printf("Original        %zu bytes\n", buf.size);
-    printf("LZMA            %zu bytes\n", dest_size);
-    printf("Entropy (split) %zu bytes\n", entropy_size);
+    printf("Original    %zu bytes\n", buf.size);
+    printf("LZMA        %zu bytes\n", dest_size);
+    printf("Entropy     %zu bytes (%zu%%)\n", entropy_size, entropy_size * 100 / buf.size);
 
-    printf("LIT             %u\n", compress.stats_lit);
-    printf("MATCH           %u\n", compress.stats_match);
-    printf("SHORTREP        %u\n", compress.stats_shortrep);
-    printf("LONGREP0        %u\n", compress.stats_longrep[0]);
-    printf("LONGREP1        %u\n", compress.stats_longrep[1]);
-    printf("LONGREP2        %u\n", compress.stats_longrep[2]);
-    printf("LONGREP3        %u\n", compress.stats_longrep[3]);
+    printf("LIT         %u\n", compress.stats_lit);
+    printf("MATCH       %u\n", compress.stats_match);
+    printf("SHORTREP    %u\n", compress.stats_shortrep);
+    printf("LONGREP0    %u\n", compress.stats_longrep[0]);
+    printf("LONGREP1    %u\n", compress.stats_longrep[1]);
+    printf("LONGREP2    %u\n", compress.stats_longrep[2]);
+    printf("LONGREP3    %u\n", compress.stats_longrep[3]);
+
+    free(dest);
+    free(buf.buf);
 
     return EXIT_SUCCESS;
 }

@@ -172,45 +172,45 @@ static OCCURRENCE find_longest_occurrence(const char       *buf,
     return occurrence;
 }
 
-static void report_unique_or_single_repeat(const char         *buf,
-                                           size_t              pos,
-                                           size_t              size,
-                                           size_t              last_offs,
-                                           REPORT_UNIQUE_BYTES report_unique_bytes,
-                                           REPORT_REPEAT       report_repeat,
-                                           void               *cookie)
+static void report_literal_or_single_match(const char    *buf,
+                                           size_t         pos,
+                                           size_t         size,
+                                           size_t         last_offs,
+                                           REPORT_LITERAL report_literal,
+                                           REPORT_MATCH   report_match,
+                                           void          *cookie)
 {
-    size_t       num_unique = 0;
-    const size_t end        = pos + size;
+    size_t       num_literal = 0;
+    const size_t end         = pos + size;
 
     for ( ; pos < end; ++pos) {
         if (last_offs && buf[pos] == buf[pos - last_offs]) {
             OCCURRENCE occurrence = { last_offs, 1, 3 };
 
-            if (num_unique) {
-                report_unique_bytes(cookie, buf, pos - num_unique, num_unique);
-                num_unique = 0;
+            if (num_literal) {
+                report_literal(cookie, buf, pos - num_literal, num_literal);
+                num_literal = 0;
             }
 
-            report_repeat(cookie, buf, pos, occurrence);
+            report_match(cookie, buf, pos, occurrence);
         }
         else
-            ++num_unique;
+            ++num_literal;
     }
 
-    if (num_unique)
-        report_unique_bytes(cookie, buf, pos - num_unique, num_unique);
+    if (num_literal)
+        report_literal(cookie, buf, pos - num_literal, num_literal);
 }
 
-int find_repeats(const char         *buf,
-                 size_t              size,
-                 REPORT_UNIQUE_BYTES report_unique_bytes,
-                 REPORT_REPEAT       report_repeat,
-                 void               *cookie)
+int find_repeats(const char    *buf,
+                 size_t         size,
+                 REPORT_LITERAL report_literal,
+                 REPORT_MATCH   report_match,
+                 void          *cookie)
 {
     OFFSET_MAP *map;
     size_t      pos          = 0;
-    size_t      num_unique   = 0;
+    size_t      num_literal  = 0;
     size_t      last_offs[4] = { 0, 0, 0, 0 };
 
     if ( ! size)
@@ -228,14 +228,14 @@ int find_repeats(const char         *buf,
         if ( ! occurrence.length) {
             set_offset(buf, pos, map);
             ++pos;
-            ++num_unique;
+            ++num_literal;
             continue;
         }
 
-        if (num_unique) {
-            report_unique_or_single_repeat(buf, pos - num_unique, num_unique, last_offs[3],
-                                           report_unique_bytes, report_repeat, cookie);
-            num_unique = 0;
+        if (num_literal) {
+            report_literal_or_single_match(buf, pos - num_literal, num_literal, last_offs[3],
+                                           report_literal, report_match, cookie);
+            num_literal = 0;
         }
 
         assert(occurrence.offset > 0);
@@ -247,7 +247,7 @@ int find_repeats(const char         *buf,
 
             occurrence.length = (num_left > 273) ? 273 : num_left;
 
-            report_repeat(cookie, buf, pos + rel_offs, occurrence);
+            report_match(cookie, buf, pos + rel_offs, occurrence);
 
             /* Append offset to the list of last 4 offsets */
             if (occurrence.last < 0) {
@@ -283,13 +283,13 @@ int find_repeats(const char         *buf,
 
     if (pos < size) {
         assert(pos + 1 == size);
-        ++num_unique;
+        ++num_literal;
         ++pos;
     }
 
-    if (num_unique)
-        report_unique_or_single_repeat(buf, pos - num_unique, num_unique, last_offs[3],
-                                       report_unique_bytes, report_repeat, cookie);
+    if (num_literal)
+        report_literal_or_single_match(buf, pos - num_literal, num_literal, last_offs[3],
+                                       report_literal, report_match, cookie);
 
     free(map);
 
