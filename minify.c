@@ -24,7 +24,7 @@ static void init_emitter(EMITTER *emitter, char *buf, size_t size)
     emitter->buf   = buf;
     emitter->begin = buf;
     emitter->end   = buf + size;
-    emitter->data  = 1;
+    emitter->data  = 0x100;
 }
 
 static void emit_bits(EMITTER *emitter, size_t value, int bits)
@@ -34,13 +34,13 @@ static void emit_bits(EMITTER *emitter, size_t value, int bits)
     do {
         const uint8_t bit = (uint8_t)((value >> --bits) & 1U);
 
-        emitter->data = (emitter->data << 1) | bit;
+        emitter->data = (emitter->data >> 1) | (bit << 8);
 
-        if (emitter->data > 0xFFU) {
+        if (emitter->data & 1) {
             assert(emitter->buf < emitter->end);
 
-            *(emitter->buf++) = (char)(uint8_t)emitter->data;
-            emitter->data     = 1;
+            *(emitter->buf++) = (char)(uint8_t)(emitter->data >> 1);
+            emitter->data     = 0x100;
         }
     } while (bits);
 }
@@ -48,7 +48,7 @@ static void emit_bits(EMITTER *emitter, size_t value, int bits)
 static void emit_tail(EMITTER *emitter)
 {
     /* Duplicate last bit */
-    const uint32_t last_bit = (emitter->data & 1U) * 0x7FU;
+    const uint32_t last_bit = ((emitter->data >> 8) & 1U) * 0x7FU;
 
     /* Emit 7 bits, which is enough to force out the last byte, but won't emit a byte unnecessarily */
     emit_bits(emitter, last_bit, 7);
@@ -226,6 +226,7 @@ static void emit_offset(COMPRESS *compress, size_t offset)
     EMITTER *const emitter = &compress->offset_emitter;
 
     assert((sizeof(offset) <= 4) || (offset <= ~0U));
+    assert(offset > 0);
 
     --offset;
 
@@ -304,6 +305,77 @@ static void report_match(void *cookie, const char *buf, size_t pos, OCCURRENCE o
     }
 }
 
+typedef struct {
+    const char *buf;
+    const char *end;
+    uint32_t    data;
+} BIT_STREAM;
+
+static void init_bit_stream(BIT_STREAM *stream, const char *buf, size_t size)
+{
+    stream->buf  = buf;
+    stream->end  = buf + size;
+    stream->data = 1;
+}
+
+static uint32_t get_bits(BIT_STREAM *stream, int bits)
+{
+    uint32_t value = 0;
+    uint32_t data  = stream->data;
+
+    while (bits) {
+        if (data == 1) {
+            assert(stream->buf < stream->end);
+            data = 0x100 + (uint8_t)*(stream->buf++);
+        }
+
+        value = (value << 1) | (data & 1);
+        data >>= 1;
+        --bits;
+    }
+
+    stream->data = data;
+
+    return value;
+}
+
+static uint32_t get_one_bit(BIT_STREAM *stream)
+{
+    return get_bits(stream, 1);
+}
+
+static uint32_t decode_size(BIT_STREAM *stream)
+{
+    uint32_t data  = get_one_bit(stream);
+    uint32_t value = 2;
+    int      bits  = 3;
+
+    if (data) {
+        data   = get_one_bit(stream);
+        value += 8;
+
+        if (data) {
+            bits   = 8;
+            value += 8;
+        }
+    }
+
+    return value + get_bits(stream, bits);
+}
+
+static uint32_t decode_offset(BIT_STREAM *stream)
+{
+    uint32_t data = get_bits(stream, 6);
+    uint32_t bits;
+
+    if (data < 2)
+        return data + 1;
+
+    bits = (data >> 1) - 1;
+
+    return (((data & 1) + 2) << bits) + get_bits(stream, bits) + 1;
+}
+
 static void decompress(char       *dest,
                        size_t      dest_size,
                        const char *compressed,
@@ -312,6 +384,79 @@ static void decompress(char       *dest,
                        size_t      size_buf_size,
                        size_t      offset_buf_size)
 {
+    BIT_STREAM  type_stream;
+    BIT_STREAM  literal_stream;
+    BIT_STREAM  size_stream;
+    BIT_STREAM  offset_stream;
+    uint32_t    last_offs[4] = { 0, 0, 0, 0 };
+    char *const begin        = dest;
+    char *const end          = dest + dest_size;
+
+    assert(dest_size);
+
+    init_bit_stream(&type_stream,    compressed,                                                    type_buf_size);
+    init_bit_stream(&literal_stream, compressed + type_buf_size,                                    literal_buf_size);
+    init_bit_stream(&size_stream,    compressed + type_buf_size + literal_buf_size,                 size_buf_size);
+    init_bit_stream(&offset_stream,  compressed + type_buf_size + literal_buf_size + size_buf_size, offset_buf_size);
+
+    do {
+        uint32_t data = get_one_bit(&type_stream);
+
+        if (data) {
+            uint32_t offset;
+            uint32_t length;
+            uint32_t i;
+            int had_match = 0;
+            int had_shortrep = 0;
+            int had_longrep = -1;
+
+            data = get_one_bit(&type_stream);
+
+            /* *REP */
+            if (data) {
+                data = get_bits(&type_stream, 2);
+
+                /* LONGREP* */
+                if (data) {
+                    --data;
+                    if (data > 1)
+                        data += get_one_bit(&type_stream);
+
+                    offset = last_offs[data];
+                    length = decode_size(&size_stream);
+                    had_longrep = data;
+                }
+                /* SHORTREP */
+                else {
+                    offset = last_offs[0];
+                    length = 1;
+                    had_shortrep = 1;
+                }
+            }
+            /* MATCH */
+            else {
+                had_match = 1;
+                length = decode_size(&size_stream);
+                offset = decode_offset(&offset_stream);
+            }
+
+            /* Put offset on the list of last offsets and deduplicate the list */
+            for (i = 0; i < 3; ++i)
+                if (last_offs[i] == offset)
+                    break;
+            for (; i; --i)
+                last_offs[i] = last_offs[i - 1];
+            last_offs[0] = offset;
+
+            assert(dest + length <= end);
+            assert(offset <= dest - begin);
+            for (i = 0; i < length; ++i, ++dest)
+                *dest = *(dest - offset);
+        }
+        /* LIT */
+        else
+            *(dest++) = get_bits(&literal_stream, 8);
+    } while (dest < end);
 }
 
 int main(int argc, char *argv[])
@@ -321,6 +466,7 @@ int main(int argc, char *argv[])
     char    *dest;
     char    *decompressed;
     char    *entropy;
+    size_t   alloc_size;
     size_t   dest_size;
     size_t   entropy_size;
 
@@ -334,16 +480,16 @@ int main(int argc, char *argv[])
     if ( ! buf.size)
         return EXIT_FAILURE;
 
-    dest_size = buf.size * (110 + 400 + 100) / 100;
-    dest = (char *)malloc(dest_size);
+    dest_size  = (buf.size < 4096 ? 4096 : buf.size) * 110 / 100;
+    alloc_size = dest_size + buf.size * (400 + 100) / 100;
+    dest = (char *)malloc(alloc_size);
     if ( ! dest) {
         perror(NULL);
         return EXIT_FAILURE;
     }
 
-    entropy = dest + buf.size * 110 / 100;
-    dest_size = buf.size * 110 / 100;
-    decompressed = dest + buf.size * (110 + 400) / 100;
+    entropy      = dest + dest_size;
+    decompressed = dest + dest_size + buf.size * 400 / 100;
 
     init_compress(&compress, dest, dest_size);
 
@@ -360,12 +506,10 @@ int main(int argc, char *argv[])
                compress.size_buf_size,
                compress.offset_buf_size);
 
-#if 0
-    if (memcmp(dest, decompressed, buf.size)) {
+    if (memcmp(buf.buf, decompressed, buf.size)) {
         fprintf(stderr, "Decompressed output doesn't match input data\n");
         return EXIT_FAILURE;
     }
-#endif
 
     entropy_size = arith_encode(entropy, buf.size * 400 / 100, dest, dest_size, 128);
 

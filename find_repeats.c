@@ -249,29 +249,19 @@ int find_repeats(const char    *buf,
 
             report_match(cookie, buf, pos + rel_offs, occurrence);
 
-            /* Append offset to the list of last 4 offsets */
-            if (occurrence.last < 0) {
-                for (i = 0; i < 3; i++)
-                    last_offs[i] = last_offs[i + 1];
-
-                last_offs[3]    = occurrence.offset;
-                occurrence.last = 3;
+            /* Append offset to the list of last 4 offsets, without duplicates */
+            for (i = 3; i > 0; --i) {
+                if (last_offs[i] == occurrence.offset)
+                    break;
             }
+            for (; i < 3; ++i)
+                last_offs[i] = last_offs[i + 1];
+            last_offs[3]    = occurrence.offset;
+            occurrence.last = 3;
 
             rel_offs         += occurrence.length;
             occurrence.length = full_length;
         } while (rel_offs < occurrence.length);
-
-        /* Append offset to the list of last 4 offsets, but without duplicates */
-        for (i = 0; i < 4; i++) {
-            if (last_offs[i] == occurrence.offset)
-                break;
-        }
-        if (i == 4)
-            i = 0;
-        for ( ; i < 3; i++)
-            last_offs[i] = last_offs[i + 1];
-        last_offs[3] = occurrence.offset;
 
         /* Update lookup table with byte pair at every position */
         for (i = 0; i < occurrence.length; ++i) {
