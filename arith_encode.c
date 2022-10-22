@@ -60,19 +60,19 @@ static void init_emit(EMIT *emit, void *dest, size_t size)
 {
     emit->dest = (uint8_t *)dest;
     emit->end  = emit->dest + size;
-    emit->data = 1;
+    emit->data = 0x100;
 }
 
 static void emit_bit(EMIT *emit, uint32_t bit)
 {
     assert(bit <= 1);
 
-    emit->data = (emit->data << 1) | bit;
+    emit->data = (emit->data >> 1) | (bit << 8);
 
-    if (emit->data > 0xFFU) {
+    if (emit->data & 1) {
         assert(emit->dest < emit->end);
-        *(emit->dest++) = (uint8_t)emit->data;
-        emit->data      = 1;
+        *(emit->dest++) = (uint8_t)(emit->data >> 1);
+        emit->data      = 0x100;
     }
 }
 
@@ -151,7 +151,7 @@ static void emit_tail(ENCODER *encoder)
     emit_bit(&encoder->emit, out_bit);
 
     /* Emit last byte */
-    while (encoder->emit.data != 1)
+    while (encoder->emit.data != 0x100)
         emit_bit(&encoder->emit, out_bit);
 }
 
@@ -201,20 +201,20 @@ static uint32_t pull_bits(BIT_PULLER *bit_puller, int bits)
     uint32_t in_data   = bit_puller->data;
 
     do {
-        out_value = (out_value << 1) | ((in_data >> 7) & 1);
-        in_data   <<= 1;
-        --bits;
+        const uint32_t new_in_data = in_data >> 1;
 
-        if (in_data >= 0x10000U) {
+        out_value = (out_value << 1) | (in_data & 1);
+
+        if (in_data < 4) {
             if (bit_puller->bytes_left) {
                 in_data = 0x100U | *(bit_puller->next_byte++);
                 --bit_puller->bytes_left;
             }
-            else
-                /* Duplicate last bit */
-                in_data >>= 1;
+            /* else keep (duplicate) last bit */
         }
-    } while (bits);
+        else
+            in_data >>= 1;
+    } while (--bits);
 
     bit_puller->data = in_data;
 
