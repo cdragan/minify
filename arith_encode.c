@@ -3,6 +3,7 @@
  */
 
 #include "arith_encode.h"
+#include "bit_stream.h"
 
 #include <assert.h>
 #include <string.h>
@@ -181,49 +182,8 @@ size_t arith_encode(void *dest, size_t max_dest_size, const void *src, size_t si
 }
 
 typedef struct {
-    const uint8_t *next_byte;
-    size_t         bytes_left;
-    uint32_t       data;
-} BIT_PULLER;
-
-static void init_bit_puller(BIT_PULLER *bit_puller, const void *src, size_t src_size)
-{
-    assert(src_size > 0);
-
-    bit_puller->data       = 0x100U | *(const uint8_t *)src;
-    bit_puller->next_byte  = (const uint8_t *)src + 1;
-    bit_puller->bytes_left = src_size - 1;
-}
-
-static uint32_t pull_bits(BIT_PULLER *bit_puller, int bits)
-{
-    uint32_t out_value = 0;
-    uint32_t in_data   = bit_puller->data;
-
-    do {
-        const uint32_t new_in_data = in_data >> 1;
-
-        out_value = (out_value << 1) | (in_data & 1);
-
-        if (in_data < 4) {
-            if (bit_puller->bytes_left) {
-                in_data = 0x100U | *(bit_puller->next_byte++);
-                --bit_puller->bytes_left;
-            }
-            /* else keep (duplicate) last bit */
-        }
-        else
-            in_data >>= 1;
-    } while (--bits);
-
-    bit_puller->data = in_data;
-
-    return out_value;
-}
-
-typedef struct {
     MODEL      model;
-    BIT_PULLER bit_puller;
+    BIT_STREAM stream;
     uint32_t   low;
     uint32_t   high;
     uint32_t   value;
@@ -232,10 +192,10 @@ typedef struct {
 static void init_decoder(DECODER *decoder, const void *src, size_t src_size, uint32_t window_size)
 {
     init_model(&decoder->model, window_size);
-    init_bit_puller(&decoder->bit_puller, src, src_size);
+    init_bit_stream(&decoder->stream, src, src_size);
     decoder->low   = 0;
     decoder->high  = ~0U;
-    decoder->value = pull_bits(&decoder->bit_puller, 32);
+    decoder->value = get_bits(&decoder->stream, 32);
 }
 
 static uint8_t decode_next_bit(DECODER *decoder)
@@ -268,7 +228,7 @@ static uint8_t decode_next_bit(DECODER *decoder)
 
         decoder->low   = decoder->low << 1;
         decoder->high  = (decoder->high << 1) + 1;
-        decoder->value = (decoder->value << 1) + pull_bits(&decoder->bit_puller, 1);
+        decoder->value = (decoder->value << 1) + get_one_bit(&decoder->stream);
     }
 
     return out_bit;
@@ -276,8 +236,7 @@ static uint8_t decode_next_bit(DECODER *decoder)
 
 void arith_decode(void *dest, size_t dest_size, const void *src, size_t src_size, uint32_t window_size)
 {
-    BIT_PULLER bit_puller;
-    DECODER    decoder;
+    DECODER decoder;
 
     if ( ! dest_size)
         return;

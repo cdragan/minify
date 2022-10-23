@@ -5,14 +5,19 @@
 #include "bit_stream.h"
 #include <assert.h>
 
-#ifndef NDEBUG
-void init_bit_stream(BIT_STREAM *stream, const char *buf, size_t size)
+void init_bit_stream(BIT_STREAM *stream, const void *buf, size_t size)
 {
-    stream->buf  = buf;
-    stream->end  = buf + size;
+    assert(size > 0);
+
+    stream->buf  = (const uint8_t *)buf;
+    stream->end  = (const uint8_t *)buf + size;
     stream->data = 1;
 }
-#endif
+
+uint32_t get_one_bit(BIT_STREAM *stream)
+{
+    return get_bits(stream, 1);
+}
 
 uint32_t get_bits(BIT_STREAM *stream, int bits)
 {
@@ -21,8 +26,10 @@ uint32_t get_bits(BIT_STREAM *stream, int bits)
 
     while (bits) {
         if (data == 1) {
-            assert(stream->buf < stream->end);
-            data = 0x100 + (uint8_t)*(stream->buf++);
+            if (stream->buf < stream->end)
+                data = 0x100 + *(stream->buf++);
+            else
+                data = (0x100 + *(stream->buf - 1)) >> 7;
         }
 
         value = (value << 1) | (data & 1);
@@ -33,9 +40,4 @@ uint32_t get_bits(BIT_STREAM *stream, int bits)
     stream->data = data;
 
     return value;
-}
-
-uint32_t get_one_bit(BIT_STREAM *stream)
-{
-    return get_bits(stream, 1);
 }
