@@ -139,10 +139,10 @@ void lza_decompress(void       *input_dest,
     uint32_t       window_size;
 
     assert(dest_size);
-    assert(compressed_size > 1);
+    assert(compressed_size > 2);
 
-    window_size = (uint32_t)*(uint8_t *)compressed << 3;
-    arith_decode(input, scratch_size, (const uint8_t *)compressed + 1, compressed_size - 1, window_size);
+    window_size = *(uint16_t *)compressed;
+    arith_decode(input, scratch_size, (const uint8_t *)compressed + 2, compressed_size - 2, window_size);
 
     lz_decompress(input_dest, dest_size, input);
 }
