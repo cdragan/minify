@@ -4,54 +4,24 @@
 
 #include "arith_encode.h"
 #include "arith_decode.h"
+#include "bit_emit.h"
 #include "bit_stream.h"
 
 #include <assert.h>
 #include <string.h>
 
 typedef struct {
-    uint8_t *dest;
-    uint8_t *end;
-    uint32_t data;
-} EMIT;
-
-static void init_emit(EMIT *emit, void *dest, size_t size)
-{
-    emit->dest = (uint8_t *)dest;
-    emit->end  = emit->dest + size;
-    emit->data = 0x100;
-}
-
-static void emit_bit(EMIT *emit, uint32_t bit)
-{
-    assert(bit <= 1);
-
-    emit->data = (emit->data >> 1) | (bit << 8);
-
-    if (emit->data & 1) {
-        assert(emit->dest < emit->end);
-        *(emit->dest++) = (uint8_t)(emit->data >> 1);
-        emit->data      = 0x100;
-    }
-}
-
-static size_t get_dest_size(const EMIT *emit, void *begin)
-{
-    return (size_t)(emit->dest - (uint8_t *)begin);
-}
-
-typedef struct {
-    MODEL    model;
-    EMIT     emit;
-    uint32_t low;
-    uint32_t high;
-    uint32_t num_pending;
+    MODEL       model;
+    BIT_EMITTER emitter;
+    uint32_t    low;
+    uint32_t    high;
+    uint32_t    num_pending;
 } ENCODER;
 
 static void init_encoder(ENCODER *encoder, void *dest, size_t size, uint32_t window_size)
 {
     init_model(&encoder->model, window_size);
-    init_emit(&encoder->emit, dest, size);
+    init_bit_emitter(&encoder->emitter, dest, size);
 
     encoder->low         = 0;
     encoder->high        = ~0U;
@@ -77,11 +47,11 @@ static void encode_bit(ENCODER *encoder, uint32_t bit)
         if (encoder->high < 0x80000000U || encoder->low >= 0x80000000U) {
             uint32_t out_bit = encoder->low >> 31;
 
-            emit_bit(&encoder->emit, out_bit);
+            emit_bit(&encoder->emitter, out_bit);
 
             out_bit ^= 1;
             while (encoder->num_pending) {
-                emit_bit(&encoder->emit, out_bit);
+                emit_bit(&encoder->emitter, out_bit);
                 --encoder->num_pending;
             }
         }
@@ -98,20 +68,18 @@ static void encode_bit(ENCODER *encoder, uint32_t bit)
     }
 }
 
-static void emit_tail(ENCODER *encoder)
+static size_t arith_emit_tail(ENCODER *encoder)
 {
     uint32_t out_bit = (encoder->low >= 0x40000000U) ? 1 : 0;
 
-    emit_bit(&encoder->emit, out_bit);
+    emit_bit(&encoder->emitter, out_bit);
 
     out_bit ^= 1;
 
     /* Emit only one bit, decoder will duplicate last bit */
-    emit_bit(&encoder->emit, out_bit);
+    emit_bit(&encoder->emitter, out_bit);
 
-    /* Emit last byte */
-    while (encoder->emit.data != 0x100)
-        emit_bit(&encoder->emit, out_bit);
+    return emit_tail(&encoder->emitter);
 }
 
 size_t arith_encode(void *dest, size_t max_dest_size, const void *src, size_t size, uint32_t window_size)
@@ -134,7 +102,5 @@ size_t arith_encode(void *dest, size_t max_dest_size, const void *src, size_t si
         } while (input_byte != 1);
     }
 
-    emit_tail(&encoder);
-
-    return get_dest_size(&encoder.emit, dest);
+    return arith_emit_tail(&encoder);
 }

@@ -5,59 +5,15 @@
 #include "lza_compress.h"
 
 #include "arith_encode.h"
+#include "bit_emit.h"
 #include "find_repeats.h"
 #include "lza_stream.h"
 
 #include <assert.h>
-#include <stdint.h>
 #include <string.h>
 
 typedef struct {
-    uint8_t *buf;
-    uint8_t *begin;
-    uint8_t *end;
-    uint32_t data;
-} EMITTER;
-
-static void init_emitter(EMITTER *emitter, uint8_t *buf, size_t size)
-{
-    emitter->buf   = buf;
-    emitter->begin = buf;
-    emitter->end   = buf + size;
-    emitter->data  = 0x100;
-}
-
-static void emit_bits(EMITTER *emitter, size_t value, int bits)
-{
-    assert(bits);
-
-    do {
-        const uint8_t bit = (uint8_t)((value >> --bits) & 1U);
-
-        emitter->data = (emitter->data >> 1) | ((uint32_t)bit << 8);
-
-        if (emitter->data & 1) {
-            assert(emitter->buf < emitter->end);
-
-            *(emitter->buf++) = (uint8_t)(emitter->data >> 1);
-            emitter->data     = 0x100;
-        }
-    } while (bits);
-}
-
-static size_t emit_tail(EMITTER *emitter)
-{
-    /* Duplicate last bit */
-    const uint32_t last_bit = ((emitter->data >> 8) & 1U) * 0x7FU;
-
-    /* Emit 7 bits, which is enough to force out the last byte, but won't emit a byte unnecessarily */
-    emit_bits(emitter, last_bit, 7);
-
-    return (size_t)(emitter->buf - emitter->begin);
-}
-
-typedef struct {
-    EMITTER          emitter[LZS_NUM_STREAMS];
+    BIT_EMITTER      emitter[LZS_NUM_STREAMS];
     COMPRESSED_SIZES sizes;
 } COMPRESS;
 
@@ -70,7 +26,7 @@ static void init_compress(COMPRESS *compress, void *buf, size_t size)
     memset(compress, 0, sizeof(*compress));
 
     for (i = 0; i < LZS_NUM_STREAMS; i++) {
-        init_emitter(&compress->emitter[i], dest, chunk_size);
+        init_bit_emitter(&compress->emitter[i], dest, chunk_size);
         dest += chunk_size;
     }
 }
@@ -134,7 +90,7 @@ static void emit_type(COMPRESS *compress, enum PACKET_TYPE type)
     emit_bits(&compress->emitter[LZS_TYPE], (size_t)type, type_size);
 }
 
-static void emit_size(EMITTER *emitter, size_t size)
+static void emit_size(BIT_EMITTER *emitter, size_t size)
 {
     /* Statistically, size tends to be mostly below 256, so few bits are needed to encode it
      *
@@ -176,7 +132,7 @@ static int count_trailing_bits(unsigned int value)
 #endif
 }
 
-static void emit_offset(EMITTER *emitter, size_t offset)
+static void emit_offset(BIT_EMITTER *emitter, size_t offset)
 {
     /* LZ77 variable-length offset encoding:
      * - 6-bit offset slot
@@ -215,7 +171,7 @@ static void emit_offset(EMITTER *emitter, size_t offset)
     }
 }
 
-static void emit_literal(EMITTER *emitter, const uint8_t *buf, size_t size)
+static void emit_literal(BIT_EMITTER *emitter, const uint8_t *buf, size_t size)
 {
     const uint8_t *const end = buf + size;
 
@@ -277,10 +233,10 @@ static void report_match(void *cookie, const char *buf, size_t pos, OCCURRENCE o
 
 static size_t emit_header(uint8_t *dest, size_t dest_size, const size_t stream_sizes[])
 {
-    EMITTER  emitter;
-    uint32_t i;
+    BIT_EMITTER emitter;
+    uint32_t    i;
 
-    init_emitter(&emitter, dest, dest_size);
+    init_bit_emitter(&emitter, dest, dest_size);
 
     for (i = 0; i < LZS_NUM_STREAMS; i++)
         emit_offset(&emitter, stream_sizes[i]);
