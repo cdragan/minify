@@ -60,10 +60,12 @@ void lz_decompress(void       *input_dest,
 
     assert(dest_size);
 
+    /* Load sizes of each stream from input */
     init_bit_stream(&stream[0], input, dest_size);
     for (i_stream = 0; i_stream < LZS_NUM_STREAMS; i_stream++)
         stream_size[i_stream] = decode_offset(&stream[0]);
 
+    /* Prepare input streams */
     input = stream[0].buf;
     for (i_stream = 0; i_stream < LZS_NUM_STREAMS; i_stream++) {
         const uint32_t size = stream_size[i_stream];
@@ -72,6 +74,7 @@ void lz_decompress(void       *input_dest,
     }
 
     do {
+        /* Decode packet type */
         uint32_t data = get_one_bit(&stream[LZS_TYPE]);
 
         if (data) {
