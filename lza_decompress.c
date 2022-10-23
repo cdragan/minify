@@ -125,11 +125,11 @@ void lz_decompress(void       *input_dest,
     } while (dest < end);
 }
 
-void decompress(void       *input_dest,
-                size_t      dest_size,
-                size_t      scratch_size,
-                const void *compressed,
-                size_t      compressed_size)
+void lza_decompress(void       *input_dest,
+                    size_t      dest_size,
+                    size_t      scratch_size,
+                    const void *compressed,
+                    size_t      compressed_size)
 {
     uint8_t *const dest  = (uint8_t *)input_dest;
     uint8_t *const input = (uint8_t *)dest + dest_size;

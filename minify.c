@@ -41,16 +41,16 @@ int main(int argc, char *argv[])
 
     decompressed = dest + compr_buffer_size;
 
-    compressed = compress(dest, compr_buffer_size, buf.buf, buf.size, 128);
+    compressed = lza_compress(dest, compr_buffer_size, buf.buf, buf.size, 128);
 
     if ( ! compressed.lz)
         return EXIT_FAILURE;
 
-    decompress(decompressed,
-               buf.size,
-               decompr_buffer_size - buf.size,
-               dest,
-               compressed.compressed);
+    lza_decompress(decompressed,
+                   buf.size,
+                   decompr_buffer_size - buf.size,
+                   dest,
+                   compressed.compressed);
 
     if (memcmp(buf.buf, decompressed, buf.size)) {
         fprintf(stderr, "Decompressed output doesn't match input data\n");

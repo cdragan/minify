@@ -296,11 +296,11 @@ size_t estimate_compress_size(size_t src_size)
     return src_size * 4;
 }
 
-COMPRESSED_SIZES compress(void       *dest,
-                          size_t      dest_size,
-                          const void *src,
-                          size_t      src_size,
-                          uint32_t    window_size)
+COMPRESSED_SIZES lza_compress(void       *dest,
+                              size_t      dest_size,
+                              const void *src,
+                              size_t      src_size,
+                              unsigned    window_size)
 {
     COMPRESS       compress;
     size_t         hdr_size;
