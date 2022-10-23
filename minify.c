@@ -50,11 +50,7 @@ int main(int argc, char *argv[])
                buf.size,
                decompr_buffer_size - buf.size,
                dest,
-               128,
-               compressed.types,
-               compressed.literals,
-               compressed.sizes,
-               compressed.offsets);
+               compressed.compressed);
 
     if (memcmp(buf.buf, decompressed, buf.size)) {
         fprintf(stderr, "Decompressed output doesn't match input data\n");

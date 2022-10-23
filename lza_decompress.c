@@ -46,16 +46,17 @@ void decompress(void       *input_dest,
                 size_t      dest_size,
                 size_t      scratch_size,
                 const void *compressed,
-                uint32_t    window_size,
-                size_t      type_buf_size,
-                size_t      literal_buf_size,
-                size_t      size_buf_size,
-                size_t      offset_buf_size)
+                size_t      compressed_size)
 {
     BIT_STREAM     type_stream;
     BIT_STREAM     literal_stream;
     BIT_STREAM     size_stream;
     BIT_STREAM     offset_stream;
+    uint32_t       window_size;
+    uint32_t       type_buf_size;
+    uint32_t       literal_buf_size;
+    uint32_t       size_buf_size;
+    uint32_t       offset_buf_size;
     uint32_t       last_offs[4] = { 0, 0, 0, 0 };
     uint8_t       *dest         = (uint8_t *)input_dest;
     uint8_t *const begin        = dest;
@@ -63,11 +64,18 @@ void decompress(void       *input_dest,
     uint8_t       *input        = (uint8_t *)dest + dest_size;
 
     assert(dest_size);
+    assert(compressed_size > 2);
 
-    arith_decode(input, scratch_size, compressed,
-                 type_buf_size + literal_buf_size + size_buf_size + offset_buf_size, /* <- TODO */
-                 window_size);
+    window_size = *(uint16_t *)compressed;
+    arith_decode(input, scratch_size, (const uint8_t *)compressed + 2, compressed_size - 2, window_size);
 
+    init_bit_stream(&type_stream, input, scratch_size);
+    type_buf_size    = decode_offset(&type_stream);
+    literal_buf_size = decode_offset(&type_stream);
+    size_buf_size    = decode_offset(&type_stream);
+    offset_buf_size  = decode_offset(&type_stream);
+
+    input = (uint8_t *)type_stream.buf;
     init_bit_stream(&type_stream,    input, type_buf_size);
     input += type_buf_size;
     init_bit_stream(&literal_stream, input, literal_buf_size);

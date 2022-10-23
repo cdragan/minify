@@ -44,13 +44,15 @@ static void emit_bits(EMITTER *emitter, size_t value, int bits)
     } while (bits);
 }
 
-static void emit_tail(EMITTER *emitter)
+static size_t emit_tail(EMITTER *emitter)
 {
     /* Duplicate last bit */
     const uint32_t last_bit = ((emitter->data >> 8) & 1U) * 0x7FU;
 
     /* Emit 7 bits, which is enough to force out the last byte, but won't emit a byte unnecessarily */
     emit_bits(emitter, last_bit, 7);
+
+    return (size_t)(emitter->buf - emitter->begin);
 }
 
 typedef struct {
@@ -75,15 +77,10 @@ static void finish_compress(COMPRESS *compress)
 {
     uint8_t *buf;
 
-    emit_tail(&compress->type_emitter);
-    emit_tail(&compress->literal_emitter);
-    emit_tail(&compress->size_emitter);
-    emit_tail(&compress->offset_emitter);
-
-    compress->sizes.types    = (size_t)(compress->type_emitter.buf    - compress->type_emitter.begin);
-    compress->sizes.literals = (size_t)(compress->literal_emitter.buf - compress->literal_emitter.begin);
-    compress->sizes.sizes    = (size_t)(compress->size_emitter.buf    - compress->size_emitter.begin);
-    compress->sizes.offsets  = (size_t)(compress->offset_emitter.buf  - compress->offset_emitter.begin);
+    compress->sizes.types    = emit_tail(&compress->type_emitter);
+    compress->sizes.literals = emit_tail(&compress->literal_emitter);
+    compress->sizes.sizes    = emit_tail(&compress->size_emitter);
+    compress->sizes.offsets  = emit_tail(&compress->offset_emitter);
 
     buf = compress->type_emitter.begin;
 
@@ -139,7 +136,7 @@ static void emit_type(COMPRESS *compress, enum PACKET_TYPE type)
     emit_bits(&compress->type_emitter, (size_t)type, type_size);
 }
 
-static void emit_size(COMPRESS *compress, size_t size)
+static void emit_size(EMITTER *emitter, size_t size)
 {
     /* Statistically, size tends to be mostly below 256, so few bits are needed to encode it
      *
@@ -148,8 +145,6 @@ static void emit_size(COMPRESS *compress, size_t size)
      * 1+0+ 3 bits      Size encoded using 3 bits, gives the sizes range from 10 to 17.
      * 1+1+ 8 bits      Size encoded using 8 bits, gives the sizes range from 18 to 273.
      */
-
-    EMITTER *const emitter = &compress->size_emitter;
 
     assert(size >= 2);
     assert(size <= 273);
@@ -193,7 +188,7 @@ static int count_trailing_bits(unsigned int value)
 #endif
 }
 
-static void emit_offset(COMPRESS *compress, size_t offset)
+static void emit_offset(EMITTER *emitter, size_t offset)
 {
     /* LZ77 variable-length offset encoding:
      * - 6-bit offset slot
@@ -215,9 +210,6 @@ static void emit_offset(COMPRESS *compress, size_t offset)
      * 32     11111x              30
      */
 
-    EMITTER *const emitter = &compress->offset_emitter;
-
-    assert((sizeof(offset) <= 4) || (offset <= ~0U));
     assert(offset > 0);
 
     --offset;
@@ -235,11 +227,9 @@ static void emit_offset(COMPRESS *compress, size_t offset)
     }
 }
 
-static void emit_literal(COMPRESS *compress, const uint8_t *buf, size_t size)
+static void emit_literal(EMITTER *emitter, const uint8_t *buf, size_t size)
 {
     const uint8_t *const end = buf + size;
-
-    EMITTER *const emitter = &compress->literal_emitter;
 
     do {
         emit_bits(emitter, *buf, 8);
@@ -252,7 +242,7 @@ static void report_literal(void *cookie, const char *buf, size_t pos, size_t siz
 
     do {
         emit_type(compress, TYPE_LIT);
-        emit_literal(compress, (const uint8_t *)&buf[pos], 1);
+        emit_literal(&compress->literal_emitter, (const uint8_t *)&buf[pos], 1);
         ++pos;
         --size;
     } while (size);
@@ -270,9 +260,9 @@ static void report_match(void *cookie, const char *buf, size_t pos, OCCURRENCE o
 
         emit_type(compress, TYPE_MATCH);
 
-        emit_size(compress, occurrence.length);
+        emit_size(&compress->size_emitter, occurrence.length);
 
-        emit_offset(compress, occurrence.offset);
+        emit_offset(&compress->offset_emitter, occurrence.offset);
     }
     else if (occurrence.length == 1) {
         assert(occurrence.last == 3);
@@ -293,8 +283,22 @@ static void report_match(void *cookie, const char *buf, size_t pos, OCCURRENCE o
 
         emit_type(compress, type);
 
-        emit_size(compress, occurrence.length);
+        emit_size(&compress->size_emitter, occurrence.length);
     }
+}
+
+static size_t emit_header(uint8_t *dest, size_t dest_size, const COMPRESSED_SIZES *sizes)
+{
+    EMITTER emitter;
+
+    init_emitter(&emitter, dest, dest_size);
+
+    emit_offset(&emitter, sizes->types);
+    emit_offset(&emitter, sizes->literals);
+    emit_offset(&emitter, sizes->sizes);
+    emit_offset(&emitter, sizes->offsets);
+
+    return emit_tail(&emitter);
 }
 
 size_t estimate_compress_size(size_t src_size)
@@ -312,21 +316,36 @@ COMPRESSED_SIZES compress(void       *dest,
                           uint32_t    window_size)
 {
     COMPRESS       compress;
-    const size_t   half_size   = dest_size / 2;
-    uint8_t *const arith_input = (uint8_t *)dest + half_size;
+    size_t         hdr_size;
+    const size_t   half_size    = dest_size / 2;
+    uint8_t *const arith_input  = (uint8_t *)dest + half_size;
+    uint8_t       *arith_output = (uint8_t *)dest;
+
+    assert(half_size >= src_size);
 
     init_compress(&compress, dest, dest_size);
 
-    if (find_repeats(src, src_size, report_literal, report_match, &compress))
+    if (find_repeats(src, src_size, report_literal, report_match, &compress)) {
         memset(&compress.sizes, 0, sizeof(compress.sizes));
-    else
-        finish_compress(&compress);
+        return compress.sizes;
+    }
 
+    finish_compress(&compress);
     assert(compress.sizes.total <= half_size);
 
-    memcpy(arith_input, dest, compress.sizes.total);
+    hdr_size = emit_header(arith_input, half_size, &compress.sizes);
+    assert(hdr_size + compress.sizes.total <= half_size);
 
-    compress.sizes.compressed = arith_encode(dest, half_size, arith_input, compress.sizes.total, window_size);
+    memcpy(arith_input + hdr_size, dest, compress.sizes.total);
+    compress.sizes.total += hdr_size;
+
+    *(uint16_t *)arith_output = (uint16_t)window_size;
+
+    compress.sizes.compressed = arith_encode(arith_output + 2,
+                                             half_size - hdr_size,
+                                             arith_input,
+                                             compress.sizes.total,
+                                             window_size) + 2;
 
     assert(compress.sizes.compressed <= half_size);
 
