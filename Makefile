@@ -5,14 +5,16 @@
 # Targets and sources
 
 targets += minify
-minify_src_files += minify.c
+minify_src_files += arith_encode.c
+minify_src_files += bit_stream.c
 minify_src_files += find_repeats.c
 minify_src_files += load_file.c
-minify_src_files += arith_encode.c
+minify_src_files += minify.c
 
 targets += arith_encoder
 arith_encoder_src_files += arith_encode_file.c
 arith_encoder_src_files += arith_encode.c
+arith_encoder_src_files += bit_stream.c
 arith_encoder_src_files += load_file.c
 
 tests += test_repeats
@@ -20,8 +22,9 @@ test_repeats_src_files += test_repeats.c
 test_repeats_src_files += find_repeats.c
 
 tests += test_arith_encode
-test_arith_encode_src_files += test_arith_encode.c
 test_arith_encode_src_files += arith_encode.c
+test_arith_encode_src_files += bit_stream.c
+test_arith_encode_src_files += test_arith_encode.c
 
 ##############################################################################
 # Determine target OS

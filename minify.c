@@ -2,9 +2,10 @@
  * Copyright (c) 2022 Chris Dragan
  */
 
+#include "arith_encode.h"
+#include "bit_stream.h"
 #include "find_repeats.h"
 #include "load_file.h"
-#include "arith_encode.h"
 
 #include <assert.h>
 #include <stdint.h>
@@ -303,45 +304,6 @@ static void report_match(void *cookie, const char *buf, size_t pos, OCCURRENCE o
 
         emit_size(compress, occurrence.length);
     }
-}
-
-typedef struct {
-    const char *buf;
-    const char *end;
-    uint32_t    data;
-} BIT_STREAM;
-
-static void init_bit_stream(BIT_STREAM *stream, const char *buf, size_t size)
-{
-    stream->buf  = buf;
-    stream->end  = buf + size;
-    stream->data = 1;
-}
-
-static uint32_t get_bits(BIT_STREAM *stream, int bits)
-{
-    uint32_t value = 0;
-    uint32_t data  = stream->data;
-
-    while (bits) {
-        if (data == 1) {
-            assert(stream->buf < stream->end);
-            data = 0x100 + (uint8_t)*(stream->buf++);
-        }
-
-        value = (value << 1) | (data & 1);
-        data >>= 1;
-        --bits;
-    }
-
-    stream->data = data;
-
-    return value;
-}
-
-static uint32_t get_one_bit(BIT_STREAM *stream)
-{
-    return get_bits(stream, 1);
 }
 
 static uint32_t decode_size(BIT_STREAM *stream)
