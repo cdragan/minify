@@ -113,7 +113,7 @@ void arith_decode(void *dest, size_t dest_size, const void *src, size_t src_size
         uint8_t out_byte = 0;
 
         for (bit = 0; bit < 8; bit++)
-            out_byte |= decode_next_bit(&decoder) << bit;
+            out_byte |= (uint8_t)((uint32_t)decode_next_bit(&decoder) << bit);
 
         *(uint8_t *)dest = out_byte;
 

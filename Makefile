@@ -87,7 +87,9 @@ else
     ifeq ($(debug), 0)
         CFLAGS += -DNDEBUG -O3
         CFLAGS += -fomit-frame-pointer
-        CFLAGS += -fno-stack-check -fno-stack-protector -fno-threadsafe-statics
+        CFLAGS += -fno-stack-check -fno-stack-protector
+	# For C++:
+	#CFLAGS += -fno-threadsafe-statics
 
         CFLAGS  += -ffunction-sections -fdata-sections
         LDFLAGS += -ffunction-sections -fdata-sections

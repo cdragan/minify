@@ -27,9 +27,9 @@ uint32_t get_bits(BIT_STREAM *stream, int bits)
     while (bits) {
         if (data == 1) {
             if (stream->buf < stream->end)
-                data = 0x100 + *(stream->buf++);
+                data = 0x100U + *(stream->buf++);
             else
-                data = (0x100 + *(stream->buf - 1)) >> 7;
+                data = (0x100U + *(stream->buf - 1)) >> 7;
         }
 
         value = (value << 1) | (data & 1);

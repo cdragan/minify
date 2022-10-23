@@ -75,7 +75,7 @@ static void encode_bit(ENCODER *encoder, uint32_t bit)
 
     for (;;) {
         if (encoder->high < 0x80000000U || encoder->low >= 0x80000000U) {
-            uint32_t out_bit = (encoder->low >= 0x80000000U) ? 1 : 0;
+            uint32_t out_bit = encoder->low >> 31;
 
             emit_bit(&encoder->emit, out_bit);
 
