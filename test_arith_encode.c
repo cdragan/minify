@@ -2,6 +2,7 @@
  * Copyright (c) 2022 Chris Dragan
  */
 
+#include "arith_decode.h"
 #include "arith_encode.h"
 
 #include <stdio.h>
