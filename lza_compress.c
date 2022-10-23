@@ -3,6 +3,8 @@
  */
 
 #include "lza_compress.h"
+
+#include "arith_encode.h"
 #include "find_repeats.h"
 
 #include <assert.h>
@@ -295,12 +297,23 @@ static void report_match(void *cookie, const char *buf, size_t pos, OCCURRENCE o
     }
 }
 
+size_t estimate_compress_size(size_t src_size)
+{
+    if (src_size < 4096)
+        src_size = 4096;
+
+    return src_size * 4;
+}
+
 COMPRESSED_SIZES compress(void       *dest,
                           size_t      dest_size,
                           const void *src,
-                          size_t      src_size)
+                          size_t      src_size,
+                          uint32_t    window_size)
 {
-    COMPRESS compress;
+    COMPRESS       compress;
+    const size_t   half_size   = dest_size / 2;
+    uint8_t *const arith_input = (uint8_t *)dest + half_size;
 
     init_compress(&compress, dest, dest_size);
 
@@ -308,6 +321,14 @@ COMPRESSED_SIZES compress(void       *dest,
         memset(&compress.sizes, 0, sizeof(compress.sizes));
     else
         finish_compress(&compress);
+
+    assert(compress.sizes.total <= half_size);
+
+    memcpy(arith_input, dest, compress.sizes.total);
+
+    compress.sizes.compressed = arith_encode(dest, half_size, arith_input, compress.sizes.total, window_size);
+
+    assert(compress.sizes.compressed <= half_size);
 
     return compress.sizes;
 }

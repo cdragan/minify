@@ -2,9 +2,6 @@
  * Copyright (c) 2022 Chris Dragan
  */
 
-#include "arith_encode.h"
-#include "bit_stream.h"
-#include "find_repeats.h"
 #include "lza_compress.h"
 #include "lza_decompress.h"
 #include "load_file.h"
@@ -18,12 +15,10 @@ int main(int argc, char *argv[])
 {
     COMPRESSED_SIZES compressed;
     BUFFER           buf;
-    char            *dest;
-    char            *decompressed;
-    char            *entropy;
-    size_t           alloc_size;
-    size_t           dest_size;
-    size_t           entropy_size;
+    uint8_t         *dest;
+    uint8_t         *decompressed;
+    size_t           compr_buffer_size;
+    size_t           decompr_buffer_size;
 
     if (argc != 2) {
         fprintf(stderr, "Error: Invalid arguments\n");
@@ -35,27 +30,27 @@ int main(int argc, char *argv[])
     if ( ! buf.size)
         return EXIT_FAILURE;
 
-    dest_size  = (buf.size < 4096 ? 4096 : buf.size) * 110 / 100;
-    alloc_size = dest_size + buf.size * (400 + 100) / 100;
-    dest = (char *)malloc(alloc_size);
+    compr_buffer_size   = estimate_compress_size(buf.size);
+    decompr_buffer_size = buf.size * 3;
+
+    dest = (uint8_t *)malloc(compr_buffer_size + decompr_buffer_size);
     if ( ! dest) {
         perror(NULL);
         return EXIT_FAILURE;
     }
 
-    entropy      = dest + dest_size;
-    decompressed = dest + dest_size + buf.size * 400 / 100;
+    decompressed = dest + compr_buffer_size;
 
-    compressed = compress(dest, dest_size, buf.buf, buf.size);
+    compressed = compress(dest, compr_buffer_size, buf.buf, buf.size, 128);
 
     if ( ! compressed.total)
         return EXIT_FAILURE;
 
-    dest_size = compressed.total;
-
     decompress(decompressed,
                buf.size,
+               decompr_buffer_size - buf.size,
                dest,
+               128,
                compressed.types,
                compressed.literals,
                compressed.sizes,
@@ -66,11 +61,9 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    entropy_size = arith_encode(entropy, buf.size * 400 / 100, dest, dest_size, 128);
-
     printf("Original    %zu bytes\n", buf.size);
-    printf("LZMA        %zu bytes\n", dest_size);
-    printf("Entropy     %zu bytes (%zu%%)\n", entropy_size, entropy_size * 100 / buf.size);
+    printf("LZMA        %zu bytes\n", compressed.total);
+    printf("Entropy     %zu bytes (%zu%%)\n", compressed.compressed, compressed.compressed * 100 / buf.size);
 
     printf("LIT         %zu\n", compressed.stats_lit);
     printf("MATCH       %zu\n", compressed.stats_match);

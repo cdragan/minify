@@ -3,6 +3,8 @@
  */
 
 #include "lza_decompress.h"
+
+#include "arith_decode.h"
 #include "bit_stream.h"
 
 #include <assert.h>
@@ -42,7 +44,9 @@ static uint32_t decode_offset(BIT_STREAM *stream)
 
 void decompress(void       *input_dest,
                 size_t      dest_size,
+                size_t      scratch_size,
                 const void *compressed,
+                uint32_t    window_size,
                 size_t      type_buf_size,
                 size_t      literal_buf_size,
                 size_t      size_buf_size,
@@ -56,9 +60,13 @@ void decompress(void       *input_dest,
     uint8_t       *dest         = (uint8_t *)input_dest;
     uint8_t *const begin        = dest;
     uint8_t *const end          = dest + dest_size;
-    const uint8_t *input        = (const uint8_t *)compressed;
+    uint8_t       *input        = (uint8_t *)dest + dest_size;
 
     assert(dest_size);
+
+    arith_decode(input, scratch_size, compressed,
+                 type_buf_size + literal_buf_size + size_buf_size + offset_buf_size, /* <- TODO */
+                 window_size);
 
     init_bit_stream(&type_stream,    input, type_buf_size);
     input += type_buf_size;
