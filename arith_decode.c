@@ -109,13 +109,13 @@ void arith_decode(void *dest, size_t dest_size, const void *src, size_t src_size
 
     for (; dest_size; --dest_size) {
 
-        int     bit;
-        uint8_t out_byte = 0;
+        uint32_t out_byte = 1;
 
-        for (bit = 0; bit < 8; bit++)
-            out_byte |= (uint8_t)((uint32_t)decode_next_bit(&decoder) << bit);
+        do {
+            out_byte = (out_byte << 1) + decode_next_bit(&decoder);
+        } while (out_byte < 0x100U);
 
-        *(uint8_t *)dest = out_byte;
+        *(uint8_t *)dest = (uint8_t)out_byte;
 
         dest = (uint8_t *)dest + 1;
     }

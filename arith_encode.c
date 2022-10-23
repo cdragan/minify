@@ -96,10 +96,10 @@ size_t arith_encode(void *dest, size_t max_dest_size, const void *src, size_t si
     for (; src_byte < src_end; ++src_byte) {
         uint32_t input_byte = *src_byte | 0x100U;
         do {
-            encode_bit(&encoder, input_byte & 1);
+            encode_bit(&encoder, (input_byte >> 7) & 1U);
 
-            input_byte >>= 1;
-        } while (input_byte != 1);
+            input_byte <<= 1;
+        } while (input_byte < 0x10000U);
     }
 
     return arith_emit_tail(&encoder);
