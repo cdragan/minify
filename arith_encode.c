@@ -21,7 +21,7 @@ typedef struct {
 static void init_encoder(ENCODER *encoder, void *dest, size_t size, uint32_t window_size)
 {
     init_model(&encoder->model, window_size);
-    init_bit_emitter(&encoder->emitter, dest, size);
+    init_bit_emitter(&encoder->emitter, (uint8_t *)dest, size);
 
     encoder->low         = 0;
     encoder->high        = ~0U;

@@ -180,19 +180,19 @@ static void emit_literal(BIT_EMITTER *emitter, const uint8_t *buf, size_t size)
     } while (++buf < end);
 }
 
-static void report_literal(void *cookie, const char *buf, size_t pos, size_t size)
+static void report_literal(void *cookie, const uint8_t *buf, size_t pos, size_t size)
 {
     COMPRESS *const compress = (COMPRESS *)cookie;
 
     do {
         emit_type(compress, TYPE_LIT);
-        emit_literal(&compress->emitter[LZS_LITERAL], (const uint8_t *)&buf[pos], 1);
+        emit_literal(&compress->emitter[LZS_LITERAL], &buf[pos], 1);
         ++pos;
         --size;
     } while (size);
 }
 
-static void report_match(void *cookie, const char *buf, size_t pos, OCCURRENCE occurrence)
+static void report_match(void *cookie, const uint8_t *buf, size_t pos, OCCURRENCE occurrence)
 {
     COMPRESS *const compress = (COMPRESS *)cookie;
 
@@ -269,7 +269,7 @@ COMPRESSED_SIZES lza_compress(void       *dest,
 
     init_compress(&compress, dest, dest_size);
 
-    if (find_repeats((const char *)src, src_size, report_literal, report_match, &compress)) {
+    if (find_repeats((const uint8_t *)src, src_size, report_literal, report_match, &compress)) {
         memset(&compress.sizes, 0, sizeof(compress.sizes));
         return compress.sizes;
     }

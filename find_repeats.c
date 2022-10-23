@@ -56,15 +56,15 @@ static uint32_t get_free_chunk(OFFSET_MAP *map)
     return map->first_free_chunk_id++;
 }
 
-static uint32_t get_map_idx(const char *buf, size_t pos)
+static uint32_t get_map_idx(const uint8_t *buf, size_t pos)
 {
-    const uint32_t b0  = (uint8_t)buf[pos];
-    const uint32_t b1  = (uint8_t)buf[pos + 1];
+    const uint32_t b0  = buf[pos];
+    const uint32_t b1  = buf[pos + 1];
     const uint32_t idx = b0 | (b1 << 8);
     return idx;
 }
 
-static void set_offset(const char *buf, size_t pos, OFFSET_MAP *map)
+static void set_offset(const uint8_t *buf, size_t pos, OFFSET_MAP *map)
 {
     const uint32_t  idx      = get_map_idx(buf, pos) & 0xFFFFU;
     uint32_t        chunk_id = map->pair_ids[idx];
@@ -96,11 +96,11 @@ static void set_offset(const char *buf, size_t pos, OFFSET_MAP *map)
     map->pair_ids[idx] = new_id;
 }
 
-static uint32_t compare(const char *buf, size_t left_pos, size_t right_pos, size_t size)
+static uint32_t compare(const uint8_t *buf, size_t left_pos, size_t right_pos, size_t size)
 {
-    const char       *left  = buf + left_pos  + 2;
-    const char       *right = buf + right_pos + 2;
-    const char *const end   = buf + size;
+    const uint8_t       *left  = buf + left_pos  + 2;
+    const uint8_t       *right = buf + right_pos + 2;
+    const uint8_t *const end   = buf + size;
 
     assert(buf[left_pos]     == buf[right_pos]);
     assert(buf[left_pos + 1] == buf[right_pos + 1]);
@@ -113,7 +113,7 @@ static uint32_t compare(const char *buf, size_t left_pos, size_t right_pos, size
     return (uint32_t)(left - (buf + left_pos));
 }
 
-static OCCURRENCE find_longest_occurrence(const char       *buf,
+static OCCURRENCE find_longest_occurrence(const uint8_t    *buf,
                                           size_t            pos,
                                           size_t            size,
                                           size_t            last_offs[],
@@ -171,7 +171,7 @@ static OCCURRENCE find_longest_occurrence(const char       *buf,
     return occurrence;
 }
 
-static void report_literal_or_single_match(const char    *buf,
+static void report_literal_or_single_match(const uint8_t *buf,
                                            size_t         pos,
                                            size_t         size,
                                            size_t         last_offs,
@@ -201,7 +201,7 @@ static void report_literal_or_single_match(const char    *buf,
         report_literal(cookie, buf, pos - num_literal, num_literal);
 }
 
-int find_repeats(const char    *buf,
+int find_repeats(const uint8_t *buf,
                  size_t         size,
                  REPORT_LITERAL report_literal,
                  REPORT_MATCH   report_match,

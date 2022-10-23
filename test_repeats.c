@@ -22,10 +22,10 @@ typedef struct {
 } EXPECT;
 
 typedef struct {
-    const char *buf;
-    size_t      size;
-    int         line;
-    EXPECT     *expect;
+    const uint8_t *buf;
+    size_t         size;
+    int            line;
+    EXPECT        *expect;
 } TEST_CASE;
 
 static const char *what_str(enum WHAT what)
@@ -83,17 +83,17 @@ static void test_report(void *cookie, enum WHAT what, size_t pos, size_t size, s
     ++test_case->expect;
 }
 
-static void report_literal(void *cookie, const char *buf, size_t pos, size_t size)
+static void report_literal(void *cookie, const uint8_t *buf, size_t pos, size_t size)
 {
     test_report(cookie, w_literal, pos, size, 0);
 }
 
-static void report_match(void *cookie, const char *buf, size_t pos, OCCURRENCE occurrence)
+static void report_match(void *cookie, const uint8_t *buf, size_t pos, OCCURRENCE occurrence)
 {
     test_report(cookie, w_MATCH, pos, occurrence.length, occurrence.offset);
 }
 
-static unsigned run_test(const char *buf, size_t size, int line, EXPECT *expect)
+static unsigned run_test(const uint8_t *buf, size_t size, int line, EXPECT *expect)
 {
     TEST_CASE test_case = { buf, size, line, expect };
 
@@ -121,7 +121,7 @@ static unsigned run_test(const char *buf, size_t size, int line, EXPECT *expect)
 
 #define RUN_TEST(test_str, expect) { \
     static const char buf[] = test_str; \
-    num_failed += run_test(buf, sizeof(buf) - 1, __LINE__, expect); \
+    num_failed += run_test((const uint8_t *)buf, sizeof(buf) - 1, __LINE__, expect); \
 }
 
 int main(void)
