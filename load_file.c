@@ -51,7 +51,7 @@ BUFFER load_file(const char *filename)
         return buf;
     }
 
-    if (fread(buf.buf, 1, size, file) != size) {
+    if (fread(buf.buf, 1, (size_t)size, file) != (size_t)size) {
         perror(filename);
         fclose(file);
 

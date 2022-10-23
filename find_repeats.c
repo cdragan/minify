@@ -40,7 +40,7 @@ static OFFSET_MAP *alloc_offset_map(size_t file_size)
     if (map) {
         memset(map, 0xFF, alloc_size);
 
-        map->num_chunks          = est_chunk_count + 1;
+        map->num_chunks          = (uint32_t)est_chunk_count + 1;
         map->first_free_chunk_id = 0;
     }
     else
@@ -66,7 +66,7 @@ static uint32_t get_map_idx(const char *buf, size_t pos)
 
 static void set_offset(const char *buf, size_t pos, OFFSET_MAP *map)
 {
-    const uint16_t  idx      = get_map_idx(buf, pos);
+    const uint32_t  idx      = get_map_idx(buf, pos) & 0xFFFFU;
     uint32_t        chunk_id = map->pair_ids[idx];
     uint32_t        new_id;
     LOCATION_CHUNK *chunk;
@@ -76,14 +76,13 @@ static void set_offset(const char *buf, size_t pos, OFFSET_MAP *map)
 
         if (chunk->offset[MAX_OFFSETS - 1] == INVALID_ID) {
             uint32_t i;
-            uint32_t next_id;
 
             for (i = 0; i < MAX_OFFSETS; i++)
                 if (chunk->offset[i] == INVALID_ID)
                     break;
             assert(i < MAX_OFFSETS);
 
-            chunk->offset[i] = pos;
+            chunk->offset[i] = (uint32_t)pos;
             return;
         }
     }
@@ -138,7 +137,7 @@ static OCCURRENCE find_longest_occurrence(const char       *buf,
                 break;
 
             length = compare(buf, old_pos, pos, size);
-            offset = pos - old_pos;
+            offset = (uint32_t)pos - old_pos;
 
             if (length < occurrence.length)
                 continue;

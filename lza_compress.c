@@ -33,12 +33,12 @@ static void emit_bits(EMITTER *emitter, size_t value, int bits)
     do {
         const uint8_t bit = (uint8_t)((value >> --bits) & 1U);
 
-        emitter->data = (emitter->data >> 1) | (bit << 8);
+        emitter->data = (emitter->data >> 1) | ((uint32_t)bit << 8);
 
         if (emitter->data & 1) {
             assert(emitter->buf < emitter->end);
 
-            *(emitter->buf++) = (char)(uint8_t)(emitter->data >> 1);
+            *(emitter->buf++) = (uint8_t)(emitter->data >> 1);
             emitter->data     = 0x100;
         }
     } while (bits);
@@ -121,7 +121,7 @@ enum PACKET_TYPE {
 
 static void emit_type(COMPRESS *compress, enum PACKET_TYPE type)
 {
-    size_t type_size = 1;
+    int type_size = 1;
 
     switch (type) {
         case TYPE_MATCH:    type_size = 2; ++compress->sizes.stats_match;         break;
@@ -221,7 +221,7 @@ static void emit_offset(EMITTER *emitter, size_t offset)
 
         offset &= ~((size_t)1 << bits_m1);
 
-        offset |= bits_m1 << bits_m1;
+        offset |= (uint32_t)bits_m1 << bits_m1;
 
         emit_bits(emitter, offset, bits_m1 + 5);
     }
@@ -325,7 +325,7 @@ COMPRESSED_SIZES compress(void       *dest,
 
     init_compress(&compress, dest, dest_size);
 
-    if (find_repeats(src, src_size, report_literal, report_match, &compress)) {
+    if (find_repeats((const char *)src, src_size, report_literal, report_match, &compress)) {
         memset(&compress.sizes, 0, sizeof(compress.sizes));
         return compress.sizes;
     }

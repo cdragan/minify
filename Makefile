@@ -78,6 +78,7 @@ ifeq ($(UNAME), Windows)
 else
     WFLAGS += -Wall -Wextra -Wno-unused-parameter -Wunused -Wno-missing-field-initializers
     WFLAGS += -Wshadow -Wformat=2 -Wconversion -Wdouble-promotion
+    WFLAGS += -Werror
 
     CFLAGS += -fvisibility=hidden
     CFLAGS += -fPIC
@@ -179,7 +180,7 @@ $(out_dir): | $(out_dir_base)
 
 define CC_RULE
 $$(call OBJ_FROM_SRC,$1): $1 | $$(out_dir)
-	$$(CC) $$(CFLAGS) $$(LTO_CFLAGS) -c $$(call COMPILER_OUTPUT,$$@) $$<
+	$$(CC) $$(CFLAGS) $$(WFLAGS) $$(LTO_CFLAGS) -c $$(call COMPILER_OUTPUT,$$@) $$<
 endef
 
 TARGET_SOURCES = $($1_src_files)
