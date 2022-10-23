@@ -6,6 +6,7 @@
 
 #include "arith_encode.h"
 #include "find_repeats.h"
+#include "lza_stream.h"
 
 #include <assert.h>
 #include <stdint.h>
@@ -56,47 +57,44 @@ static size_t emit_tail(EMITTER *emitter)
 }
 
 typedef struct {
-    EMITTER          type_emitter;
-    EMITTER          literal_emitter;
-    EMITTER          size_emitter;
-    EMITTER          offset_emitter;
+    EMITTER          emitter[LZS_NUM_STREAMS];
     COMPRESSED_SIZES sizes;
 } COMPRESS;
 
 static void init_compress(COMPRESS *compress, void *buf, size_t size)
 {
+    uint8_t     *dest       = (uint8_t *)buf;
+    const size_t chunk_size = size / 4;
+    uint32_t     i;
+
     memset(compress, 0, sizeof(*compress));
 
-    init_emitter(&compress->type_emitter,    (uint8_t *)buf,                size / 4);
-    init_emitter(&compress->literal_emitter, (uint8_t *)buf + size / 4,     size / 4);
-    init_emitter(&compress->size_emitter,    (uint8_t *)buf + size / 2,     size / 4);
-    init_emitter(&compress->offset_emitter , (uint8_t *)buf + 3 * size / 4, size / 4);
+    for (i = 0; i < LZS_NUM_STREAMS; i++) {
+        init_emitter(&compress->emitter[i], dest, chunk_size);
+        dest += chunk_size;
+    }
 }
 
-static void finish_compress(COMPRESS *compress)
+static void finish_compress(COMPRESS *compress, size_t stream_sizes[])
 {
     uint8_t *buf;
+    uint32_t i;
+    size_t   total = 0;
 
-    compress->sizes.types    = emit_tail(&compress->type_emitter);
-    compress->sizes.literals = emit_tail(&compress->literal_emitter);
-    compress->sizes.sizes    = emit_tail(&compress->size_emitter);
-    compress->sizes.offsets  = emit_tail(&compress->offset_emitter);
+    for (i = 0; i < LZS_NUM_STREAMS; i++) {
+        const size_t stream_size = emit_tail(&compress->emitter[i]);
+        stream_sizes[i]          = stream_size;
+        total                   += stream_size;
+    }
 
-    buf = compress->type_emitter.begin;
+    buf = compress->emitter[0].begin;
 
-    buf += compress->sizes.types;
-    memmove(buf, compress->literal_emitter.begin, compress->sizes.literals);
+    for (i = 1; i < LZS_NUM_STREAMS; i++) {
+        buf += stream_sizes[i - 1];
+        memmove(buf, compress->emitter[i].begin, stream_sizes[i]);
+    }
 
-    buf += compress->sizes.literals;
-    memmove(buf, compress->size_emitter.begin, compress->sizes.sizes);
-
-    buf += compress->sizes.sizes;
-    memmove(buf, compress->offset_emitter.begin, compress->sizes.offsets);
-
-    compress->sizes.total = compress->sizes.types +
-                            compress->sizes.literals +
-                            compress->sizes.sizes +
-                            compress->sizes.offsets;
+    compress->sizes.lz = total;
 }
 
 /* LZMA packets
@@ -133,7 +131,7 @@ static void emit_type(COMPRESS *compress, enum PACKET_TYPE type)
         default:                           ++compress->sizes.stats_lit;           break;
     }
 
-    emit_bits(&compress->type_emitter, (size_t)type, type_size);
+    emit_bits(&compress->emitter[LZS_TYPE], (size_t)type, type_size);
 }
 
 static void emit_size(EMITTER *emitter, size_t size)
@@ -148,16 +146,6 @@ static void emit_size(EMITTER *emitter, size_t size)
 
     assert(size >= 2);
     assert(size <= 273);
-
-    /* Total 11795 packets.
-     *
-     * Packets with size:
-     *
-     * Size    Count
-     *  2       4986
-     *  3       2656
-     *  4       1554
-     */
 
     if (size <= 9) {
         emit_bits(emitter, 0, 1);
@@ -242,7 +230,7 @@ static void report_literal(void *cookie, const char *buf, size_t pos, size_t siz
 
     do {
         emit_type(compress, TYPE_LIT);
-        emit_literal(&compress->literal_emitter, (const uint8_t *)&buf[pos], 1);
+        emit_literal(&compress->emitter[LZS_LITERAL], (const uint8_t *)&buf[pos], 1);
         ++pos;
         --size;
     } while (size);
@@ -260,9 +248,9 @@ static void report_match(void *cookie, const char *buf, size_t pos, OCCURRENCE o
 
         emit_type(compress, TYPE_MATCH);
 
-        emit_size(&compress->size_emitter, occurrence.length);
+        emit_size(&compress->emitter[LZS_SIZE], occurrence.length);
 
-        emit_offset(&compress->offset_emitter, occurrence.offset);
+        emit_offset(&compress->emitter[LZS_OFFSET], occurrence.offset);
     }
     else if (occurrence.length == 1) {
         assert(occurrence.last == 3);
@@ -283,20 +271,19 @@ static void report_match(void *cookie, const char *buf, size_t pos, OCCURRENCE o
 
         emit_type(compress, type);
 
-        emit_size(&compress->size_emitter, occurrence.length);
+        emit_size(&compress->emitter[LZS_SIZE], occurrence.length);
     }
 }
 
-static size_t emit_header(uint8_t *dest, size_t dest_size, const COMPRESSED_SIZES *sizes)
+static size_t emit_header(uint8_t *dest, size_t dest_size, const size_t stream_sizes[])
 {
-    EMITTER emitter;
+    EMITTER  emitter;
+    uint32_t i;
 
     init_emitter(&emitter, dest, dest_size);
 
-    emit_offset(&emitter, sizes->types);
-    emit_offset(&emitter, sizes->literals);
-    emit_offset(&emitter, sizes->sizes);
-    emit_offset(&emitter, sizes->offsets);
+    for (i = 0; i < LZS_NUM_STREAMS; i++)
+        emit_offset(&emitter, stream_sizes[i]);
 
     return emit_tail(&emitter);
 }
@@ -317,6 +304,7 @@ COMPRESSED_SIZES compress(void       *dest,
 {
     COMPRESS       compress;
     size_t         hdr_size;
+    size_t         stream_sizes[LZS_NUM_STREAMS];
     const size_t   half_size    = dest_size / 2;
     uint8_t *const arith_input  = (uint8_t *)dest + half_size;
     uint8_t       *arith_output = (uint8_t *)dest;
@@ -330,21 +318,21 @@ COMPRESSED_SIZES compress(void       *dest,
         return compress.sizes;
     }
 
-    finish_compress(&compress);
-    assert(compress.sizes.total <= half_size);
+    finish_compress(&compress, stream_sizes);
+    assert(compress.sizes.lz <= half_size);
 
-    hdr_size = emit_header(arith_input, half_size, &compress.sizes);
-    assert(hdr_size + compress.sizes.total <= half_size);
+    hdr_size = emit_header(arith_input, half_size, stream_sizes);
+    assert(hdr_size + compress.sizes.lz <= half_size);
 
-    memcpy(arith_input + hdr_size, dest, compress.sizes.total);
-    compress.sizes.total += hdr_size;
+    memcpy(arith_input + hdr_size, dest, compress.sizes.lz);
+    compress.sizes.lz += hdr_size;
 
     *(uint16_t *)arith_output = (uint16_t)window_size;
 
     compress.sizes.compressed = arith_encode(arith_output + 2,
                                              half_size - hdr_size,
                                              arith_input,
-                                             compress.sizes.total,
+                                             compress.sizes.lz,
                                              window_size) + 2;
 
     assert(compress.sizes.compressed <= half_size);

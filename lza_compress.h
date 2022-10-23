@@ -7,11 +7,7 @@
 
 typedef struct {
     size_t compressed;          /* Final compressed size       */
-    size_t total;               /* Total size after LZ77 compression, sum of the 4 sizes below */
-    size_t types;               /* Size of the types buffer    */
-    size_t literals;            /* Size of the literals buffer */
-    size_t sizes;               /* Size of the sizes buffer    */
-    size_t offsets;             /* Size of the offsets buffer  */
+    size_t lz;                  /* Total size after LZ77 compression */
 
     size_t stats_lit;           /* Number of LIT packets       */
     size_t stats_match;         /* Number of MATCH packets     */

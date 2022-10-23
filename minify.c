@@ -43,7 +43,7 @@ int main(int argc, char *argv[])
 
     compressed = compress(dest, compr_buffer_size, buf.buf, buf.size, 128);
 
-    if ( ! compressed.total)
+    if ( ! compressed.lz)
         return EXIT_FAILURE;
 
     decompress(decompressed,
@@ -58,7 +58,7 @@ int main(int argc, char *argv[])
     }
 
     printf("Original    %zu bytes\n", buf.size);
-    printf("LZMA        %zu bytes\n", compressed.total);
+    printf("LZMA        %zu bytes\n", compressed.lz);
     printf("Entropy     %zu bytes (%zu%%)\n", compressed.compressed, compressed.compressed * 100 / buf.size);
 
     printf("LIT         %zu\n", compressed.stats_lit);

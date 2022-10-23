@@ -6,6 +6,7 @@
 
 #include "arith_decode.h"
 #include "bit_stream.h"
+#include "lza_stream.h"
 
 #include <assert.h>
 #include <stdint.h>
@@ -46,14 +47,8 @@ void lz_decompress(void       *input_dest,
                    size_t      dest_size,
                    const void *input_src)
 {
-    BIT_STREAM     type_stream;
-    BIT_STREAM     literal_stream;
-    BIT_STREAM     size_stream;
-    BIT_STREAM     offset_stream;
-    uint32_t       type_buf_size;
-    uint32_t       literal_buf_size;
-    uint32_t       size_buf_size;
-    uint32_t       offset_buf_size;
+    BIT_STREAM     stream[LZS_NUM_STREAMS];
+    uint32_t       stream_size[LZS_NUM_STREAMS];
     uint32_t       last_offs[4] = { 0, 0, 0, 0 };
     uint8_t       *dest         = (uint8_t *)input_dest;
 #ifndef NDEBUG
@@ -61,46 +56,43 @@ void lz_decompress(void       *input_dest,
 #endif
     uint8_t *const end          = dest + dest_size;
     const uint8_t *input        = (const uint8_t *)input_src;
+    uint32_t       i_stream;
 
     assert(dest_size);
 
-    init_bit_stream(&type_stream, input, dest_size);
-    type_buf_size    = decode_offset(&type_stream);
-    literal_buf_size = decode_offset(&type_stream);
-    size_buf_size    = decode_offset(&type_stream);
-    offset_buf_size  = decode_offset(&type_stream);
+    init_bit_stream(&stream[0], input, dest_size);
+    for (i_stream = 0; i_stream < LZS_NUM_STREAMS; i_stream++)
+        stream_size[i_stream] = decode_offset(&stream[0]);
 
-    input = type_stream.buf;
-    init_bit_stream(&type_stream,    input, type_buf_size);
-    input += type_buf_size;
-    init_bit_stream(&literal_stream, input, literal_buf_size);
-    input += literal_buf_size;
-    init_bit_stream(&size_stream,    input, size_buf_size);
-    input += size_buf_size;
-    init_bit_stream(&offset_stream,  input, offset_buf_size);
+    input = stream[0].buf;
+    for (i_stream = 0; i_stream < LZS_NUM_STREAMS; i_stream++) {
+        const uint32_t size = stream_size[i_stream];
+        init_bit_stream(&stream[i_stream], input, size);
+        input += size;
+    }
 
     do {
-        uint32_t data = get_one_bit(&type_stream);
+        uint32_t data = get_one_bit(&stream[LZS_TYPE]);
 
         if (data) {
             uint32_t offset;
             uint32_t length;
             uint32_t i;
 
-            data = get_one_bit(&type_stream);
+            data = get_one_bit(&stream[LZS_TYPE]);
 
             /* *REP */
             if (data) {
-                data = get_bits(&type_stream, 2);
+                data = get_bits(&stream[LZS_TYPE], 2);
 
                 /* LONGREP* */
                 if (data) {
                     --data;
                     if (data > 1)
-                        data += get_one_bit(&type_stream);
+                        data += get_one_bit(&stream[LZS_TYPE]);
 
                     offset = last_offs[data];
-                    length = decode_size(&size_stream);
+                    length = decode_size(&stream[LZS_SIZE]);
                 }
                 /* SHORTREP */
                 else {
@@ -110,8 +102,8 @@ void lz_decompress(void       *input_dest,
             }
             /* MATCH */
             else {
-                length = decode_size(&size_stream);
-                offset = decode_offset(&offset_stream);
+                length = decode_size(&stream[LZS_SIZE]);
+                offset = decode_offset(&stream[LZS_OFFSET]);
             }
 
             /* Put offset on the list of last offsets and deduplicate the list */
@@ -129,7 +121,7 @@ void lz_decompress(void       *input_dest,
         }
         /* LIT */
         else
-            *(dest++) = (uint8_t)get_bits(&literal_stream, 8);
+            *(dest++) = (uint8_t)get_bits(&stream[LZS_LITERAL], 8);
     } while (dest < end);
 }
 
