@@ -283,13 +283,15 @@ COMPRESSED_SIZES lza_compress(void       *dest,
     memcpy(arith_input + hdr_size, dest, compress.sizes.lz);
     compress.sizes.lz += hdr_size;
 
-    *(uint16_t *)arith_output = (uint16_t)window_size;
+    assert((window_size >> 3) < 0x100U);
+    assert((window_size & 0x7U) == 0U);
+    *(uint8_t *)arith_output = (uint8_t)(window_size >> 3);
 
-    compress.sizes.compressed = arith_encode(arith_output + 2,
+    compress.sizes.compressed = arith_encode(arith_output + 1,
                                              half_size - hdr_size,
                                              arith_input,
                                              compress.sizes.lz,
-                                             window_size) + 2;
+                                             window_size) + 1;
 
     assert(compress.sizes.compressed <= half_size);
 

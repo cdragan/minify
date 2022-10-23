@@ -58,7 +58,7 @@ int main(int argc, char *argv[])
     }
 
     printf("Original    %zu bytes\n", buf.size);
-    printf("LZMA        %zu bytes\n", compressed.lz);
+    printf("LZ77        %zu bytes\n", compressed.lz);
     printf("Entropy     %zu bytes (%zu%%)\n", compressed.compressed, compressed.compressed * 100 / buf.size);
 
     printf("LIT         %zu\n", compressed.stats_lit);
