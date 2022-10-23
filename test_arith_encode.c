@@ -34,7 +34,6 @@ int main(void)
     {
         const size_t out_size = arith_encode(NULL, 0, NULL, 0, 256);
         TEST(out_size == 0);
-        arith_decode(NULL, 0, NULL, 0, 256);
     }
 
     {
