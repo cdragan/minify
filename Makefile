@@ -10,6 +10,7 @@ minify_src_files += arith_encode.c
 minify_src_files += bit_stream.c
 minify_src_files += find_repeats.c
 minify_src_files += load_file.c
+minify_src_files += lza_compress.c
 minify_src_files += lza_decompress.c
 minify_src_files += minify.c
 
