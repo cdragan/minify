@@ -6,6 +6,7 @@
 
 #include "arith_encode.h"
 #include "bit_emit.h"
+#include "bit_ops.h"
 #include "find_repeats.h"
 #include "lza_stream.h"
 
@@ -117,21 +118,6 @@ static void emit_size(BIT_EMITTER *emitter, size_t size)
     }
 }
 
-static int count_trailing_bits(unsigned int value)
-{
-#if defined(__GNUC__) || defined(__clang__)
-    return __builtin_clz(value);
-#elif defined(_MSC_VER)
-    unsigned long bit;
-
-    _BitScanReverse(&bit, value);
-
-    return (int)bit;
-#else
-#error "Not implemented!"
-#endif
-}
-
 static void emit_offset(BIT_EMITTER *emitter, size_t offset)
 {
     /* LZ77 variable-length offset encoding:
@@ -161,7 +147,7 @@ static void emit_offset(BIT_EMITTER *emitter, size_t offset)
     if (offset < 2)
         emit_bits(emitter, offset, 6);
     else {
-        const int bits_m1 = 31 - count_trailing_bits((unsigned int)offset);
+        const int bits_m1 = 31 - count_leading_zeroes((unsigned int)offset);
 
         offset &= ~((size_t)1 << bits_m1);
 
