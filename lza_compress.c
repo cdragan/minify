@@ -195,7 +195,7 @@ static void report_match(void *cookie, const uint8_t *buf, size_t pos, OCCURRENC
         emit_distance(&compress->emitter[LZS_OFFSET], occurrence.distance);
     }
     else if (occurrence.length == 1) {
-        assert(occurrence.last == 3);
+        assert(occurrence.last == 0);
 
         emit_type(compress, TYPE_SHORTREP);
     }
@@ -203,11 +203,11 @@ static void report_match(void *cookie, const uint8_t *buf, size_t pos, OCCURRENC
         enum PACKET_TYPE type;
 
         switch (occurrence.last) {
-            case 0: type = TYPE_LONGREP3; break;
-            case 1: type = TYPE_LONGREP2; break;
-            case 2: type = TYPE_LONGREP1; break;
+            case 3: type = TYPE_LONGREP3; break;
+            case 2: type = TYPE_LONGREP2; break;
+            case 1: type = TYPE_LONGREP1; break;
             default:
-                assert(occurrence.last == 3);
+                assert(occurrence.last == 0);
                 type = TYPE_LONGREP0;
         }
 
