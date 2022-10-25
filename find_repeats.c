@@ -3,6 +3,7 @@
  */
 
 #include "find_repeats.h"
+#include "bit_ops.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -21,6 +22,7 @@ typedef struct {
     uint32_t       pair_ids[256 * 256];
     uint32_t       num_chunks;
     uint32_t       first_free_chunk_id;
+    uint8_t        dummy_align[64 - 2 * sizeof(uint32_t)]; /* Align each chunk on cache line boundary */
     LOCATION_CHUNK chunks[1];
 } OFFSET_MAP;
 
@@ -74,13 +76,16 @@ static void set_offset(const uint8_t *buf, size_t pos, OFFSET_MAP *map)
     if (chunk_id != INVALID_ID) {
         chunk = &map->chunks[chunk_id];
 
-        if (chunk->offset[MAX_OFFSETS - 1] == INVALID_ID) {
+        if (chunk->offset[0] == INVALID_ID) {
             uint32_t i;
 
-            for (i = 0; i < MAX_OFFSETS; i++)
-                if (chunk->offset[i] == INVALID_ID)
+            for (i = 1; i < MAX_OFFSETS; i++) {
+                if (chunk->offset[i] != INVALID_ID) {
+                    assert(pos > chunk->offset[i]);
                     break;
-            assert(i < MAX_OFFSETS);
+                }
+            }
+            --i;
 
             chunk->offset[i] = (uint32_t)pos;
             return;
@@ -89,9 +94,9 @@ static void set_offset(const uint8_t *buf, size_t pos, OFFSET_MAP *map)
 
     new_id = get_free_chunk(map);
 
-    chunk            = &map->chunks[new_id];
-    chunk->next_id   = chunk_id;
-    chunk->offset[0] = (uint32_t)pos;
+    chunk                          = &map->chunks[new_id];
+    chunk->next_id                 = chunk_id;
+    chunk->offset[MAX_OFFSETS - 1] = (uint32_t)pos;
 
     map->pair_ids[idx] = new_id;
 }
@@ -113,6 +118,33 @@ static uint32_t compare(const uint8_t *buf, size_t left_pos, size_t right_pos, s
     return (uint32_t)(left - (buf + left_pos));
 }
 
+static int calc_match_score(uint32_t offset, uint32_t size)
+{
+    /* Number of bits if this was emitted as LIT packets (literals) */
+    const int lit_bits = 9 * (int)size;
+
+    /* Number of bits if this was emitted as MATCH packet */
+    const int match_hdr_bits = 2;
+    const int size_bits      = (size <= 9) ? 4 : (size <= 17) ? 5 : 10;
+    const int offset_bits    = (offset < 2) ? 6 : (36 - count_leading_zeroes(offset));
+    const int match_bits     = match_hdr_bits + size_bits + offset_bits;
+
+    return lit_bits - match_bits;
+}
+
+static int calc_longrep_score(int longrep, uint32_t size)
+{
+    /* Number of bits if this was emitted as LIT packets (literals) */
+    const int lit_bits = 9 * (int)size;
+
+    /* Number of bits if this was emitted as LONGREP* packet */
+    const int longrep_hdr_bits = (longrep > 1) ? 4 : 5;
+    const int size_bits        = (size <= 9) ? 4 : (size <= 17) ? 5 : 10;
+    const int longrep_bits     = longrep_hdr_bits + size_bits;
+
+    return lit_bits - longrep_bits;
+}
+
 static OCCURRENCE find_longest_occurrence(const uint8_t    *buf,
                                           size_t            pos,
                                           size_t            size,
@@ -120,6 +152,7 @@ static OCCURRENCE find_longest_occurrence(const uint8_t    *buf,
                                           const OFFSET_MAP *map)
 {
     OCCURRENCE occurrence = { 0, 0, -1 };
+    int        score      = 0;
 
     uint32_t chunk_id = map->pair_ids[get_map_idx(buf, pos)];
 
@@ -131,10 +164,11 @@ static OCCURRENCE find_longest_occurrence(const uint8_t    *buf,
             uint32_t length;
             uint32_t offset;
             int      last;
+            int      cur_score;
 
             const uint32_t old_pos = chunk->offset[i];
             if (old_pos == INVALID_ID)
-                break;
+                continue;
 
             length = compare(buf, old_pos, pos, size);
             offset = (uint32_t)pos - old_pos;
@@ -146,7 +180,9 @@ static OCCURRENCE find_longest_occurrence(const uint8_t    *buf,
                 if (offset == last_offs[last])
                     break;
 
-            if (length == occurrence.length && (last < occurrence.last || offset > occurrence.offset))
+            cur_score = (last < 0) ? calc_match_score(offset, length) : calc_longrep_score(last, length);
+
+            if (cur_score <= score)
                 continue;
 
             if (last < 0) {
@@ -163,6 +199,7 @@ static OCCURRENCE find_longest_occurrence(const uint8_t    *buf,
             occurrence.length = length;
             occurrence.offset = offset;
             occurrence.last   = last;
+            score             = cur_score;
         }
 
         chunk_id = chunk->next_id;
