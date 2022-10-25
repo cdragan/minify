@@ -6,7 +6,7 @@
 #include <stdint.h>
 
 typedef struct {
-    size_t offset;
+    size_t distance;
     size_t length;
     int    last;
 } OCCURRENCE;

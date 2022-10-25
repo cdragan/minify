@@ -11,7 +11,7 @@
 #include <assert.h>
 #include <stdint.h>
 
-static uint32_t decode_size(BIT_STREAM *stream)
+static uint32_t decode_length(BIT_STREAM *stream)
 {
     uint32_t data  = get_one_bit(stream);
     uint32_t value = 2;
@@ -30,7 +30,7 @@ static uint32_t decode_size(BIT_STREAM *stream)
     return value + get_bits(stream, bits);
 }
 
-static uint32_t decode_offset(BIT_STREAM *stream)
+static uint32_t decode_distance(BIT_STREAM *stream)
 {
     uint32_t data = get_bits(stream, 6);
     uint32_t bits;
@@ -49,7 +49,7 @@ void lz_decompress(void       *input_dest,
 {
     BIT_STREAM     stream[LZS_NUM_STREAMS];
     uint32_t       stream_size[LZS_NUM_STREAMS];
-    uint32_t       last_offs[4] = { 0, 0, 0, 0 };
+    uint32_t       last_dist[4] = { 0, 0, 0, 0 };
     uint8_t       *dest         = (uint8_t *)input_dest;
 #ifndef NDEBUG
     uint8_t *const begin        = dest;
@@ -63,7 +63,7 @@ void lz_decompress(void       *input_dest,
     /* Load sizes of each stream from input */
     init_bit_stream(&stream[0], input, dest_size);
     for (i_stream = 0; i_stream < LZS_NUM_STREAMS; i_stream++)
-        stream_size[i_stream] = decode_offset(&stream[0]);
+        stream_size[i_stream] = decode_distance(&stream[0]);
 
     /* Prepare input streams */
     input = stream[0].buf;
@@ -78,7 +78,7 @@ void lz_decompress(void       *input_dest,
         uint32_t data = get_one_bit(&stream[LZS_TYPE]);
 
         if (data) {
-            uint32_t offset;
+            uint32_t distance;
             uint32_t length;
             uint32_t i;
 
@@ -94,33 +94,33 @@ void lz_decompress(void       *input_dest,
                     if (data > 1)
                         data += get_one_bit(&stream[LZS_TYPE]);
 
-                    offset = last_offs[data];
-                    length = decode_size(&stream[LZS_SIZE]);
+                    distance = last_dist[data];
+                    length = decode_length(&stream[LZS_SIZE]);
                 }
                 /* SHORTREP */
                 else {
-                    offset = last_offs[0];
+                    distance = last_dist[0];
                     length = 1;
                 }
             }
             /* MATCH */
             else {
-                length = decode_size(&stream[LZS_SIZE]);
-                offset = decode_offset(&stream[LZS_OFFSET]);
+                length   = decode_length(&stream[LZS_SIZE]);
+                distance = decode_distance(&stream[LZS_OFFSET]);
             }
 
-            /* Put offset on the list of last offsets and deduplicate the list */
+            /* Put distance on the list of last distances and deduplicate the list */
             for (i = 0; i < 3; ++i)
-                if (last_offs[i] == offset)
+                if (last_dist[i] == distance)
                     break;
             for (; i; --i)
-                last_offs[i] = last_offs[i - 1];
-            last_offs[0] = offset;
+                last_dist[i] = last_dist[i - 1];
+            last_dist[0] = distance;
 
             assert(dest + length <= end);
-            assert(offset <= dest - begin);
+            assert(distance <= dest - begin);
             for (i = 0; i < length; ++i, ++dest)
-                *dest = *(dest - offset);
+                *dest = *(dest - distance);
         }
         /* LIT */
         else

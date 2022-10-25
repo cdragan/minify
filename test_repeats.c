@@ -18,7 +18,7 @@ typedef struct {
     enum WHAT what;
     size_t    pos;
     size_t    size;
-    size_t    offset;
+    size_t    distance;
 } EXPECT;
 
 typedef struct {
@@ -40,7 +40,7 @@ static const char *what_str(enum WHAT what)
     return "unknown";
 }
 
-static void test_report(void *cookie, enum WHAT what, size_t pos, size_t size, size_t offset)
+static void test_report(void *cookie, enum WHAT what, size_t pos, size_t size, size_t distance)
 {
     TEST_CASE *test_case = (TEST_CASE *)cookie;
     EXPECT    *expect    = test_case->expect;
@@ -57,7 +57,7 @@ static void test_report(void *cookie, enum WHAT what, size_t pos, size_t size, s
 
     assert(what == w_literal || what == w_MATCH);
 
-    assert((what != w_literal) || (expect->offset == 0));
+    assert((what != w_literal) || (expect->distance == 0));
 
     if (expect->pos != pos) {
         fprintf(stderr, "test_repeats.c:%d: expected pos %zu but got %zu\n",
@@ -73,9 +73,9 @@ static void test_report(void *cookie, enum WHAT what, size_t pos, size_t size, s
         return;
     }
 
-    if (what == w_MATCH && expect->offset != offset) {
-        fprintf(stderr, "test_repeats.c:%d: expected offset %zu but got %zu\n",
-                test_case->line, expect->offset, offset);
+    if (what == w_MATCH && expect->distance != distance) {
+        fprintf(stderr, "test_repeats.c:%d: expected distance %zu but got %zu\n",
+                test_case->line, expect->distance, distance);
         test_case->expect = NULL;
         return;
     }
@@ -90,7 +90,7 @@ static void report_literal(void *cookie, const uint8_t *buf, size_t pos, size_t 
 
 static void report_match(void *cookie, const uint8_t *buf, size_t pos, OCCURRENCE occurrence)
 {
-    test_report(cookie, w_MATCH, pos, occurrence.length, occurrence.offset);
+    test_report(cookie, w_MATCH, pos, occurrence.length, occurrence.distance);
 }
 
 static unsigned run_test(const uint8_t *buf, size_t size, int line, EXPECT *expect)
@@ -201,7 +201,7 @@ int main(void)
         RUN_TEST("0bc1bcd2bcd", expect);
     }
 
-    /* Prefer smallest offset */
+    /* Prefer smallest distance */
     {
         static EXPECT expect[] = {
             { w_literal, 0, 4, 0 },
@@ -212,7 +212,7 @@ int main(void)
         RUN_TEST("abc abcabc", expect);
     }
 
-    /* Prefer same offset as last time */
+    /* Prefer same distance as last time */
     {
         static EXPECT expect[] = {
             { w_literal,  0, 7,  0 },

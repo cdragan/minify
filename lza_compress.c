@@ -55,13 +55,13 @@ static void finish_compress(COMPRESS *compress, size_t stream_sizes[])
 }
 
 /* LZMA packets
- * 0 + byte             LIT         A single literal/original byte.
- * 1+0 + size + offset  MATCH       Repeated sequence with size and offset.
- * 1+1+0+0              SHORTREP    Repeated sequence, size=1, offset equal to the last used offset.
- * 1+1+0+1 + size       LONGREP[0]  Repeated sequence, offset is equal to the last used offset.
- * 1+1+1+0 + size       LONGREP[1]  Repeated sequence, offset is equal to the second last used offset.
- * 1+1+1+1+0 + size     LONGREP[2]  Repeated sequence, offset is equal to the third last used offset.
- * 1+1+1+1+1 + size     LONGREP[3]  Repeated sequence, offset is equal to the fourth last used offset.
+ * 0 + byte                 LIT         A single literal/original byte.
+ * 1+0 + length + distance  MATCH       Repeated sequence with length and distance.
+ * 1+1+0+0                  SHORTREP    Repeated sequence, length=1, distance equal to the last used distance.
+ * 1+1+0+1 + length         LONGREP[0]  Repeated sequence, distance is equal to the last used distance.
+ * 1+1+1+0 + length         LONGREP[1]  Repeated sequence, distance is equal to the second last used distance.
+ * 1+1+1+1+0 + length       LONGREP[2]  Repeated sequence, distance is equal to the third last used distance.
+ * 1+1+1+1+1 + length       LONGREP[3]  Repeated sequence, distance is equal to the fourth last used distance.
  */
 
 enum PACKET_TYPE {
@@ -91,9 +91,9 @@ static void emit_type(COMPRESS *compress, enum PACKET_TYPE type)
     emit_bits(&compress->emitter[LZS_TYPE], (size_t)type, type_size);
 }
 
-static void emit_size(BIT_EMITTER *emitter, size_t size)
+static void emit_length(BIT_EMITTER *emitter, size_t length)
 {
-    /* Statistically, size tends to be mostly below 256, so few bits are needed to encode it
+    /* Statistically, length tends to be mostly below 256, so few bits are needed to encode it
      *
      * LZ77 length encoding:
      * 0+ 3 bits        Size encoded using 3 bits, gives the sizes range from 2 to 9.
@@ -101,59 +101,59 @@ static void emit_size(BIT_EMITTER *emitter, size_t size)
      * 1+1+ 8 bits      Size encoded using 8 bits, gives the sizes range from 18 to 273.
      */
 
-    assert(size >= 2);
-    assert(size <= 273);
+    assert(length >= 2);
+    assert(length <= 273);
 
-    if (size <= 9) {
+    if (length <= 9) {
         emit_bits(emitter, 0, 1);
-        emit_bits(emitter, size - 2, 3);
+        emit_bits(emitter, length - 2, 3);
     }
-    else if (size <= 17) {
+    else if (length <= 17) {
         emit_bits(emitter, 2, 2);
-        emit_bits(emitter, size - 10, 3);
+        emit_bits(emitter, length - 10, 3);
     }
     else {
         emit_bits(emitter, 3, 2);
-        emit_bits(emitter, size - 18, 8);
+        emit_bits(emitter, length - 18, 8);
     }
 }
 
-static void emit_offset(BIT_EMITTER *emitter, size_t offset)
+static void emit_distance(BIT_EMITTER *emitter, size_t distance)
 {
-    /* LZ77 variable-length offset encoding:
-     * - 6-bit offset slot
+    /* LZ77 variable-length distance encoding:
+     * - 6-bit distance slot
      * - Followed by a variable number of bits, depending on the value of the slot
      *
-     * 6-bit offset slot  Highest 2 bits  Context encoded bits
-     * 0                  00              0
-     * 1                  01              0
-     * 2–62 (even)        10              ((slot / 2) − 1)
-     * 3–63 (odd)         11              (((slot − 1) / 2) − 1)
+     * 6-bit distance slot  Highest 2 bits  Context encoded bits
+     * 0                    00              0
+     * 1                    01              0
+     * 2–62 (even)          10              ((slot / 2) − 1)
+     * 3–63 (odd)           11              (((slot − 1) / 2) − 1)
      *
-     * Bits   6-bit offset slot   Context encoded bits
-     * 2      00001x              0
-     * 3      00010x              1
-     * 4      00011x              2
-     * 5      00100x              3
-     * 6      00101x              4
-     * :      :::                 :
-     * 32     11111x              30
+     * Bits   6-bit distance slot   Context encoded bits
+     * 2      00001x                0
+     * 3      00010x                1
+     * 4      00011x                2
+     * 5      00100x                3
+     * 6      00101x                4
+     * :      :::                   :
+     * 32     11111x                30
      */
 
-    assert(offset > 0);
+    assert(distance > 0);
 
-    --offset;
+    --distance;
 
-    if (offset < 2)
-        emit_bits(emitter, offset, 6);
+    if (distance < 2)
+        emit_bits(emitter, distance, 6);
     else {
-        const int bits_m1 = 31 - count_leading_zeroes((unsigned int)offset);
+        const int bits_m1 = 31 - count_leading_zeroes((unsigned int)distance);
 
-        offset &= ~((size_t)1 << bits_m1);
+        distance &= ~((size_t)1 << bits_m1);
 
-        offset |= (uint32_t)bits_m1 << bits_m1;
+        distance |= (uint32_t)bits_m1 << bits_m1;
 
-        emit_bits(emitter, offset, bits_m1 + 5);
+        emit_bits(emitter, distance, bits_m1 + 5);
     }
 }
 
@@ -190,9 +190,9 @@ static void report_match(void *cookie, const uint8_t *buf, size_t pos, OCCURRENC
 
         emit_type(compress, TYPE_MATCH);
 
-        emit_size(&compress->emitter[LZS_SIZE], occurrence.length);
+        emit_length(&compress->emitter[LZS_SIZE], occurrence.length);
 
-        emit_offset(&compress->emitter[LZS_OFFSET], occurrence.offset);
+        emit_distance(&compress->emitter[LZS_OFFSET], occurrence.distance);
     }
     else if (occurrence.length == 1) {
         assert(occurrence.last == 3);
@@ -213,7 +213,7 @@ static void report_match(void *cookie, const uint8_t *buf, size_t pos, OCCURRENC
 
         emit_type(compress, type);
 
-        emit_size(&compress->emitter[LZS_SIZE], occurrence.length);
+        emit_length(&compress->emitter[LZS_SIZE], occurrence.length);
     }
 }
 
@@ -225,7 +225,7 @@ static size_t emit_header(uint8_t *dest, size_t dest_size, const size_t stream_s
     init_bit_emitter(&emitter, dest, dest_size);
 
     for (i = 0; i < LZS_NUM_STREAMS; i++)
-        emit_offset(&emitter, stream_sizes[i]);
+        emit_distance(&emitter, stream_sizes[i]);
 
     return emit_tail(&emitter);
 }
