@@ -26,25 +26,34 @@ typedef struct {
     LOCATION_CHUNK chunks[1];
 } OFFSET_MAP;
 
-static size_t estimate_chunks(size_t file_size)
+static uint32_t estimate_chunks(size_t file_size)
 {
-    const size_t est_chunk_count = (file_size / MAX_OFFSETS) * 2;
+    const uint32_t est_chunk_count = ((uint32_t)file_size / MAX_OFFSETS) * 2;
 
     return (est_chunk_count < 0x10000U) ? 0x10000U : est_chunk_count;
 }
 
+static size_t calc_offset_map_size(uint32_t num_chunks)
+{
+    assert(num_chunks > 1);
+    return sizeof(OFFSET_MAP) + sizeof(LOCATION_CHUNK) * (num_chunks - 1);
+}
+
+static void init_offset_map(OFFSET_MAP *map, uint32_t num_chunks)
+{
+    memset(map, 0xFF, calc_offset_map_size(num_chunks));
+
+    map->num_chunks          = num_chunks;
+    map->first_free_chunk_id = 0;
+}
+
 static OFFSET_MAP *alloc_offset_map(size_t file_size)
 {
-    const size_t est_chunk_count = estimate_chunks(file_size);
-    const size_t alloc_size      = sizeof(OFFSET_MAP) + sizeof(LOCATION_CHUNK) * est_chunk_count;
+    const uint32_t num_chunks = estimate_chunks(file_size);
 
-    OFFSET_MAP *const map = (OFFSET_MAP *)malloc(alloc_size);
-    if (map) {
-        memset(map, 0xFF, alloc_size);
-
-        map->num_chunks          = (uint32_t)est_chunk_count + 1;
-        map->first_free_chunk_id = 0;
-    }
+    OFFSET_MAP *const map = (OFFSET_MAP *)malloc(calc_offset_map_size(num_chunks));
+    if (map)
+        init_offset_map(map, num_chunks);
     else
         perror(NULL);
 
