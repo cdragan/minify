@@ -11,7 +11,7 @@ inline static int count_leading_zeroes(unsigned int value)
 
     _BitScanReverse(&bit, value);
 
-    return (int)bit;
+    return 31 - (int)bit;
 #else
 #error "Not implemented!"
 #endif
