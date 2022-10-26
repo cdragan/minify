@@ -112,19 +112,19 @@ static void set_offset(const uint8_t *buf, size_t pos, OFFSET_MAP *map)
 
 static uint32_t compare(const uint8_t *buf, size_t left_pos, size_t right_pos, size_t size)
 {
-    const uint8_t       *left  = buf + left_pos  + 2;
-    const uint8_t       *right = buf + right_pos + 2;
-    const uint8_t *const end   = buf + size;
+    const uint8_t *left      = &buf[left_pos];
+    const uint8_t *right     = &buf[right_pos];
+    const uint32_t right_end = (uint32_t)(size - right_pos);
+    const uint32_t end       = (right_end > 273) ? 273 : right_end;
+    uint32_t       length    = 2;
 
-    assert(buf[left_pos]     == buf[right_pos]);
-    assert(buf[left_pos + 1] == buf[right_pos + 1]);
+    assert(left[0] == right[0]);
+    assert(left[1] == right[1]);
 
-    while ((right < end) && (*left == *right)) {
-        ++left;
-        ++right;
-    }
+    while ((length < end) && (left[length] == right[length]))
+        ++length;
 
-    return (uint32_t)(left - (buf + left_pos));
+    return length;
 }
 
 static int calc_match_score(uint32_t distance, uint32_t length)
@@ -269,7 +269,6 @@ int find_repeats(const uint8_t *buf,
     while (pos + 1 < size) {
         OCCURRENCE occurrence = find_longest_occurrence(buf, pos, size, last_dist, map);
         size_t     i;
-        size_t     rel_offs;
 
         if ( ! occurrence.length) {
             set_offset(buf, pos, map);
@@ -286,28 +285,17 @@ int find_repeats(const uint8_t *buf,
 
         assert(occurrence.distance > 0);
 
-        rel_offs = 0;
-        do {
-            const size_t full_length = occurrence.length;
-            const size_t num_left    = full_length - rel_offs;
+        report_match(cookie, buf, pos, occurrence);
 
-            occurrence.length = (num_left > 273) ? 273 : num_left;
-
-            report_match(cookie, buf, pos + rel_offs, occurrence);
-
-            /* Append distance to the list of last 4 distances, without duplicates */
-            for (i = 0; i < 3; i++) {
-                if (last_dist[i] == occurrence.distance)
-                    break;
-            }
-            for (; i > 0; i--)
-                last_dist[i] = last_dist[i - 1];
-            last_dist[0]    = occurrence.distance;
-            occurrence.last = 0;
-
-            rel_offs         += occurrence.length;
-            occurrence.length = full_length;
-        } while (rel_offs < occurrence.length);
+        /* Append distance to the list of last 4 distances, without duplicates */
+        for (i = 0; i < 3; i++) {
+            if (last_dist[i] == occurrence.distance)
+                break;
+        }
+        for (; i > 0; i--)
+            last_dist[i] = last_dist[i - 1];
+        last_dist[0]    = occurrence.distance;
+        occurrence.last = 0;
 
         /* Update lookup table with byte pair at every position */
         for (i = 0; i < occurrence.length; ++i) {
