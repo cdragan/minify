@@ -182,19 +182,19 @@ static OCCURRENCE find_longest_occurrence(const uint8_t    *buf,
             length = compare(buf, old_pos, pos, size);
             distance = (uint32_t)pos - old_pos;
 
-            if (length < occurrence.length)
-                continue;
-
-            for (last = 0; last < 4; last++)
+            for (last = 3; last >= 0; last --)
                 if (distance == last_dist[last])
                     break;
 
-            cur_score = (last == 4) ? calc_match_score(distance, length) : calc_longrep_score(last, length);
+            cur_score = (last < 0) ? calc_match_score(distance, length) : calc_longrep_score(last, length);
 
             if (cur_score <= score || cur_score < 0)
                 continue;
 
-            if (last == 4) {
+            if (last < 0) {
+                if (length < occurrence.length)
+                    continue;
+
                 if (length == 2 && distance > (1U << 6))
                     continue;
 
@@ -207,7 +207,7 @@ static OCCURRENCE find_longest_occurrence(const uint8_t    *buf,
 
             occurrence.length   = length;
             occurrence.distance = distance;
-            occurrence.last     = (last == 4) ? -1 : last;
+            occurrence.last     = last;
             score               = cur_score;
         }
 
