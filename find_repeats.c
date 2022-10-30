@@ -191,7 +191,7 @@ static OCCURRENCE find_longest_occurrence(const uint8_t    *buf,
 
             cur_score = (last == 4) ? calc_match_score(distance, length) : calc_longrep_score(last, length);
 
-            if (cur_score <= score)
+            if (cur_score <= score || cur_score < 0)
                 continue;
 
             if (last == 4) {
