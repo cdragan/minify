@@ -4,6 +4,7 @@
 
 #include "bit_stream.h"
 #include <assert.h>
+#include <stdio.h>
 
 void init_bit_stream(BIT_STREAM *stream, const void *buf, size_t size)
 {
@@ -11,7 +12,7 @@ void init_bit_stream(BIT_STREAM *stream, const void *buf, size_t size)
 
     stream->buf  = (const uint8_t *)buf;
     stream->end  = (const uint8_t *)buf + size;
-    stream->data = 1;
+    stream->data = 0;
 }
 
 uint32_t get_one_bit(BIT_STREAM *stream)
@@ -25,15 +26,15 @@ uint32_t get_bits(BIT_STREAM *stream, int bits)
     uint32_t data  = stream->data;
 
     while (bits) {
-        if (data == 1) {
+        if ( ! (uint8_t)data) {
             if (stream->buf < stream->end)
-                data = 0x100U + *(stream->buf++);
+                data = ((uint32_t)*(stream->buf++) << 1) | 1U;
             else
-                data = (0x100U + *(stream->buf - 1)) >> 7;
+                data >>= 1;
         }
 
-        value = (value << 1) | (data & 1);
-        data >>= 1;
+        value = (value << 1) | ((data >> 8) & 1U);
+        data <<= 1;
         --bits;
     }
 

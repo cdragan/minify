@@ -34,6 +34,11 @@ test_arith_encode_src_files += bit_emit.c
 test_arith_encode_src_files += bit_stream.c
 test_arith_encode_src_files += test_arith_encode.c
 
+tests += test_bit_stream
+test_bit_stream_src_files += bit_emit.c
+test_bit_stream_src_files += bit_stream.c
+test_bit_stream_src_files += test_bit_stream.c
+
 ##############################################################################
 # Determine target OS
 
