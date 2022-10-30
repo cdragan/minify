@@ -6,9 +6,9 @@
 #include <stdint.h>
 
 typedef struct {
-    size_t distance;
-    size_t length;
-    int    last;
+    uint32_t distance;
+    uint32_t length;
+    int      last;
 } OCCURRENCE;
 
 typedef void (* REPORT_LITERAL)(void *cookie, const uint8_t *buf, size_t pos, size_t size);

@@ -154,14 +154,46 @@ static int calc_longrep_score(int longrep, uint32_t length)
     return lit_bits - longrep_bits;
 }
 
+static OCCURRENCE find_occurrence_at_last_dist(const uint8_t *buf,
+                                               size_t         pos,
+                                               size_t         size,
+                                               const uint32_t last_dist[])
+{
+    OCCURRENCE occurrence = { 0, 0, -1 };
+    int        last;
+
+    for (last = 3; last >= 0; last--) {
+        const uint32_t distance = last_dist[last];
+        uint32_t       length;
+
+        if ( ! distance)
+            continue;
+
+        if (buf[pos - distance] != buf[pos])
+            continue;
+        if (buf[pos - distance + 1] != buf[pos + 1])
+            continue;
+
+        length = compare(buf, pos - distance, pos, size);
+
+        if (length >= occurrence.length) {
+            occurrence.distance = distance;
+            occurrence.length   = length;
+            occurrence.last     = last;
+        }
+    }
+
+    return occurrence;
+}
+
 static OCCURRENCE find_longest_occurrence(const uint8_t    *buf,
                                           size_t            pos,
                                           size_t            size,
-                                          size_t            last_dist[],
+                                          const uint32_t    last_dist[],
                                           const OFFSET_MAP *map)
 {
-    OCCURRENCE occurrence = { 0, 0, -1 };
-    int        score      = 0;
+    OCCURRENCE occurrence = find_occurrence_at_last_dist(buf, pos, size, last_dist);
+    int        score      = (occurrence.last < 0) ? 0 : calc_longrep_score(occurrence.last, occurrence.length);
 
     uint32_t chunk_id = map->pair_ids[get_map_idx(buf, pos)];
 
@@ -179,31 +211,30 @@ static OCCURRENCE find_longest_occurrence(const uint8_t    *buf,
             if (old_pos == INVALID_ID)
                 continue;
 
-            length = compare(buf, old_pos, pos, size);
+            length   = compare(buf, old_pos, pos, size);
             distance = (uint32_t)pos - old_pos;
 
             for (last = 3; last >= 0; last --)
                 if (distance == last_dist[last])
                     break;
 
-            cur_score = (last < 0) ? calc_match_score(distance, length) : calc_longrep_score(last, length);
-
-            if (cur_score <= score || cur_score < 0)
+            /* Last distances already processed */
+            if (last >= 0)
                 continue;
 
-            if (last < 0) {
-                if (length < occurrence.length)
-                    continue;
+            cur_score = calc_match_score(distance, length);
 
-                if (length == 2 && distance > (1U << 6))
-                    continue;
+            if (cur_score <= score)
+                continue;
 
-                if (length == 3 && distance > (1U << 11))
-                    continue;
+            if (cur_score < 2)
+                continue;
 
-                if (length == 4 && distance > (1U << 13))
-                    continue;
-            }
+            if (length == 3 && distance > (1U << 11))
+                continue;
+
+            if (length == 4 && distance > (1U << 13))
+                continue;
 
             occurrence.length   = length;
             occurrence.distance = distance;
@@ -220,7 +251,7 @@ static OCCURRENCE find_longest_occurrence(const uint8_t    *buf,
 static void report_literal_or_single_match(const uint8_t *buf,
                                            size_t         pos,
                                            size_t         size,
-                                           size_t         last_dist,
+                                           uint32_t       last_dist,
                                            REPORT_LITERAL report_literal,
                                            REPORT_MATCH   report_match,
                                            void          *cookie)
@@ -256,7 +287,7 @@ int find_repeats(const uint8_t *buf,
     OFFSET_MAP *map;
     size_t      pos          = 0;
     size_t      num_literal  = 0;
-    size_t      last_dist[4] = { 0, 0, 0, 0 };
+    uint32_t    last_dist[4] = { 0, 0, 0, 0 };
 
     if ( ! size)
         return 0;
@@ -275,6 +306,27 @@ int find_repeats(const uint8_t *buf,
             ++pos;
             ++num_literal;
             continue;
+        }
+
+        /* See if we can find a better match */
+        if ((occurrence.last < 0) && (pos + 2 < size)) {
+
+            const OCCURRENCE next_occurrence = find_occurrence_at_last_dist(buf, pos + 1, size, last_dist);
+
+            if (next_occurrence.last >= 0) {
+                const int cur_score  = calc_match_score(occurrence.distance, occurrence.length);
+                const int next_score = calc_longrep_score(next_occurrence.last, next_occurrence.length);
+
+                /* If it is beneficial, report the current byte as LIT(eral) and start match from
+                 * the next byte */
+                if (next_score >= cur_score) {
+                    set_offset(buf, pos, map);
+                    ++pos;
+                    ++num_literal;
+
+                    occurrence = next_occurrence;
+                }
+            }
         }
 
         if (num_literal) {
