@@ -16,6 +16,7 @@
 typedef struct {
     BIT_EMITTER      emitter[LZS_NUM_STREAMS];
     COMPRESSED_SIZES sizes;
+    uint8_t          prev_lit;
 } COMPRESS;
 
 static void init_compress(COMPRESS *compress, void *buf, size_t size)
@@ -157,12 +158,18 @@ static void emit_distance(BIT_EMITTER *emitter, size_t distance)
     }
 }
 
-static void emit_literal(BIT_EMITTER *emitter, const uint8_t *buf, size_t size)
+static void emit_literal(COMPRESS *compress, const uint8_t *buf, size_t size)
 {
     const uint8_t *const end = buf + size;
 
     do {
-        emit_bits(emitter, *buf, 8);
+        const uint8_t lit = *buf;
+
+        emit_bits(&compress->emitter[LZS_LITERAL_MSB], (lit ^ compress->prev_lit) >> 7, 1);
+
+        compress->prev_lit = lit;
+
+        emit_bits(&compress->emitter[LZS_LITERAL], lit, 7);
     } while (++buf < end);
 }
 
@@ -172,7 +179,7 @@ static void report_literal(void *cookie, const uint8_t *buf, size_t pos, size_t 
 
     do {
         emit_type(compress, TYPE_LIT);
-        emit_literal(&compress->emitter[LZS_LITERAL], &buf[pos], 1);
+        emit_literal(compress, &buf[pos], 1);
         ++pos;
         --size;
     } while (size);

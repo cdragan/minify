@@ -57,6 +57,7 @@ void lz_decompress(void       *input_dest,
     uint8_t *const end          = dest + dest_size;
     const uint8_t *input        = (const uint8_t *)input_src;
     uint32_t       i_stream;
+    uint8_t        prev_lit     = 0;
 
     assert(dest_size);
 
@@ -123,8 +124,14 @@ void lz_decompress(void       *input_dest,
                 *dest = *(dest - distance);
         }
         /* LIT */
-        else
-            *(dest++) = (uint8_t)get_bits(&stream[LZS_LITERAL], 8);
+        else {
+            uint8_t lit = (uint8_t)((get_one_bit(&stream[LZS_LITERAL_MSB]) << 7) ^ prev_lit) & 0x80U;
+
+            lit += (uint8_t)get_bits(&stream[LZS_LITERAL], 7);
+
+            *(dest++) = lit;
+            prev_lit  = lit;
+        }
     } while (dest < end);
 }
 

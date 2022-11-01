@@ -4,6 +4,7 @@
 
 enum LZ_STREAM {
     LZS_TYPE,
+    LZS_LITERAL_MSB,
     LZS_LITERAL,
     LZS_SIZE,
     LZS_OFFSET,
