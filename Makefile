@@ -13,6 +13,7 @@ minify_src_files += find_repeats.c
 minify_src_files += load_file.c
 minify_src_files += lza_compress.c
 minify_src_files += lza_decompress.c
+minify_src_files += exe_pe.c
 minify_src_files += minify.c
 
 targets += arith_encoder

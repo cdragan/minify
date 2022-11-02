@@ -2,6 +2,7 @@
  * Copyright (c) 2022 Chris Dragan
  */
 
+#include "exe_pe.h"
 #include "lza_compress.h"
 #include "lza_decompress.h"
 #include "load_file.h"
@@ -29,6 +30,11 @@ int main(int argc, char *argv[])
     buf = load_file(argv[1]);
     if ( ! buf.size)
         return EXIT_FAILURE;
+
+    if (is_pe_file(buf.buf, buf.size)) {
+        if (exe_pe(buf.buf, buf.size))
+            return EXIT_FAILURE;
+    }
 
     compr_buffer_size   = estimate_compress_size(buf.size);
     decompr_buffer_size = buf.size * 3;
