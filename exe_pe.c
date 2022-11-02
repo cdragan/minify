@@ -356,7 +356,7 @@ int exe_pe(const void *buf, size_t size)
         return 1;
     }
 
-    sect_offset  = pe_offset + sizeof(PE_HEADER) + get_uint16_le(pe_header->optional_hdr_size);
+    sect_offset  = pe_offset + (uint32_t)sizeof(PE_HEADER) + get_uint16_le(pe_header->optional_hdr_size);
     num_sections = get_uint16_le(pe_header->number_of_sections);
 
     if (sect_offset + num_sections * sizeof(SECTION_HEADER) > size) {
@@ -369,8 +369,8 @@ int exe_pe(const void *buf, size_t size)
         return 1;
     }
 
-    opt32_header = (const PE32_HEADER *)at_offset(buf, pe_offset + sizeof(PE_HEADER));
-    opt64_header = (const PE32_PLUS_HEADER *)at_offset(buf, pe_offset + sizeof(PE_HEADER));
+    opt32_header = (const PE32_HEADER *)at_offset(buf, pe_offset + (uint32_t)sizeof(PE_HEADER));
+    opt64_header = (const PE32_PLUS_HEADER *)at_offset(buf, pe_offset + (uint32_t)sizeof(PE_HEADER));
 
     pe_format = get_uint16_le(opt64_header->pe_format);
     if (pe_format != PE_FORMAT_PE32 && pe_format != PE_FORMAT_PE32_PLUS) {

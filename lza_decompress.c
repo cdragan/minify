@@ -127,7 +127,7 @@ void lz_decompress(void       *input_dest,
         else {
             uint8_t lit = (uint8_t)((get_one_bit(&stream[LZS_LITERAL_MSB]) << 7) ^ prev_lit) & 0x80U;
 
-            lit += (uint8_t)get_bits(&stream[LZS_LITERAL], 7);
+            lit += get_bits(&stream[LZS_LITERAL], 7);
 
             *(dest++) = lit;
             prev_lit  = lit;
