@@ -149,6 +149,14 @@ typedef struct {
     uint32_le flags;
 } SECTION_HEADER;
 
+typedef struct {
+    uint32_le import_lookup_table_rva;
+    uint32_le time_stamp;
+    uint32_le forwarder_chain;
+    uint32_le name_rva;
+    uint32_le import_address_table_rva;
+} IMPORT_DIR_ENTRY;
+
 #define PE_MACHINE_X86_32  0x014C
 #define PE_MACHINE_X86_64  0x8664
 #define PE_MACHINE_AARCH64 0xAA64
@@ -289,6 +297,64 @@ static uint32_t get_pe_offset(const void *buf, size_t size)
     return pe_offset;
 }
 
+static int process_import_table(uint8_t *mem_image,
+                                uint32_t image_size,
+                                uint32_t table_va,
+                                uint32_t table_size,
+                                int      is_64bit)
+{
+    IMPORT_DIR_ENTRY *import_dir_entry = (IMPORT_DIR_ENTRY *)(mem_image + table_va);
+    IMPORT_DIR_ENTRY *import_table_end = (IMPORT_DIR_ENTRY *)(mem_image + table_va + table_size);
+
+    for ( ; import_dir_entry + 1 <= import_table_end; import_dir_entry++) {
+        const uint32_t forwarder_chain          = get_uint32_le(import_dir_entry->forwarder_chain);
+        const uint32_t name_rva                 = get_uint32_le(import_dir_entry->name_rva);
+        const uint32_t import_address_table_rva = get_uint32_le(import_dir_entry->import_address_table_rva);
+        uint32_t       idx;
+
+        /* Last entry */
+        if ( ! import_address_table_rva)
+            break;
+
+        if (forwarder_chain) {
+            fprintf(stderr, "Error: Forwarder chain is non-zero for %s, which is not supported\n",
+                    (const char *)(mem_image + name_rva));
+            return 1;
+        }
+
+        printf("import %s\n", (const char *)(mem_image + name_rva));
+
+        idx = import_address_table_rva;
+        for (;;) {
+            uint64_t value;
+            uint32_t by_ordinal;
+
+            if (is_64bit) {
+                value      = get_uint64_le(*(const uint64_le *)(mem_image + idx));
+                idx       += 8;
+                by_ordinal = (uint32_t)(value >> 63);
+            }
+            else {
+                value      = get_uint32_le(*(const uint32_le *)(mem_image + idx));
+                idx       += 4;
+                by_ordinal = (uint32_t)(value >> 31);
+            }
+
+            if ( ! value)
+                break;
+
+            if (by_ordinal)
+                printf("        ord                      %u\n", (uint32_t)value & 0xFFFFU);
+            else {
+                const uint32_t fun_name_rva = (uint32_t)value & 0x7FFFFFFFU;
+                printf("        name                     %s\n", (const char *)(mem_image + fun_name_rva + 2));
+            }
+        }
+    }
+
+    return 0;
+}
+
 int is_pe_file(const void *buf, size_t size)
 {
     return get_pe_offset(buf, size) > 0;
@@ -311,6 +377,7 @@ int exe_pe(const void *buf, size_t size)
     uint32_t                va_end    = 0;
     uint32_t                alloc_size;
     unsigned int            i;
+    int                     error     = 1;
     uint16_t                pe_flags;
     uint16_t                pe_format;
 
@@ -380,6 +447,7 @@ int exe_pe(const void *buf, size_t size)
     }
 
     /* Print optional header */
+    printf("        PE flags                 0x%x\n",         pe_flags);
     printf("optional header:\n");
     printf("        linker ver               %u.%u\n",        opt64_header->linker_ver_major, opt64_header->linker_ver_minor);
     printf("        code size                0x%x\n",         get_uint32_le(opt64_header->size_of_code));
@@ -424,6 +492,7 @@ int exe_pe(const void *buf, size_t size)
         char           str_flags[128] = { 0 };
         const uint32_t section_va     = get_uint32_le(section_header[i].virtual_address);
         const uint32_t va_size        = get_uint32_le(section_header[i].virtual_size);
+        uint32_t       value;
 
         decode_section_flags(str_flags, sizeof(str_flags), get_uint32_le(section_header[i].flags));
 
@@ -438,65 +507,28 @@ int exe_pe(const void *buf, size_t size)
         printf("        size_of_raw_data         0x%x\n", get_uint32_le(section_header[i].size_of_raw_data));
         printf("        virtual_address          0x%x\n", get_uint32_le(section_header[i].virtual_address));
         printf("        virtual_size             0x%x\n", get_uint32_le(section_header[i].virtual_size));
-        printf("        pointer_to_relocations   %u\n", get_uint32_le(section_header[i].pointer_to_relocations));
-        printf("        pointer_to_line_numbers  %u\n", get_uint32_le(section_header[i].pointer_to_line_numbers));
-        printf("        number_of_relocations    %u\n", get_uint16_le(section_header[i].number_of_relocations));
-        printf("        number_of_line_numbers   %u\n", get_uint16_le(section_header[i].number_of_line_numbers));
         printf("        flags                    0x%x%s\n", get_uint32_le(section_header[i].flags), str_flags);
-    }
 
-    /* Process and print data directory entries */
-    if (pe_format == PE_FORMAT_PE32) {
-        data_dir = opt32_header->rva_and_sizes;
-        dir_size = get_uint32_le(opt32_header->number_of_rva_and_sizes);
-    }
-    else {
-        data_dir = opt64_header->rva_and_sizes;
-        dir_size = get_uint32_le(opt64_header->number_of_rva_and_sizes);
-    }
-
-    if (dir_size == 0 ||
-        (dir_size - 1) * sizeof(DATA_DIRECTORY) + sizeof(PE32_PLUS_HEADER) <
-            get_uint16_le(pe_header->optional_hdr_size)) {
-
-        fprintf(stderr, "Error: Unexpected optional header size\n");
-        return 1;
-    }
-
-    for (i = 0; i < dir_size; i++) {
-        const DATA_DIRECTORY *dir = &data_dir[i];
-
-        const uint32_t virtual_address = get_uint32_le(dir->virtual_address);
-        const uint32_t entry_size      = get_uint32_le(dir->size);
-
-        static const char *const dir_names[] = {
-            "export table",
-            "import table",
-            "resource table",
-            "exception table",
-            "certificate table",
-            "base relocation_table",
-            "debug",
-            "architecture",
-            "global ptr",
-            "tls table",
-            "load config_table",
-            "bound import",
-            "iat"
-        };
-
-        if (entry_size == 0) {
-            if (virtual_address)
-                fprintf(stderr, "Warning: Unexpected virtual address 0x%x for section %u of size 0\n",
-                        virtual_address, i);
-            continue;
+        value = get_uint32_le(section_header[i].pointer_to_relocations);
+        if (value) {
+            fprintf(stderr, "Error: pointer_to_relocations is %u in section %u but expected 0\n", value, i);
+            return 1;
         }
-
-        printf("dir %u (%s): va=0x%x size=0x%x\n",
-               i,
-               (i < sizeof(dir_names) / sizeof(dir_names[0])) ? dir_names[i] : "unknown",
-               virtual_address,
-               entry_size);
+        value = get_uint32_le(section_header[i].pointer_to_line_numbers);
+        if (value) {
+            fprintf(stderr, "Error: pointer_to_line_numbers is %u in section %u but expected 0\n", value, i);
+            return 1;
+        }
+        value = get_uint16_le(section_header[i].number_of_relocations);
+        if (value) {
+            fprintf(stderr, "Error: number_of_relocations is %u in section %u but expected 0\n", value, i);
+            return 1;
+        }
+        value = get_uint16_le(section_header[i].number_of_line_numbers);
+        if (value) {
+            fprintf(stderr, "Error: number_of_line_numbers is %u in section %u but expected 0\n", value, i);
+            return 1;
+        }
     }
 
     /* Allocate memory for the exe image as it is loaded in memory
@@ -526,6 +558,94 @@ int exe_pe(const void *buf, size_t size)
         memcpy(dest, src, copy_size);
     }
 
+    /* Process data directory entries */
+    if (pe_format == PE_FORMAT_PE32) {
+        data_dir = opt32_header->rva_and_sizes;
+        dir_size = get_uint32_le(opt32_header->number_of_rva_and_sizes);
+    }
+    else {
+        data_dir = opt64_header->rva_and_sizes;
+        dir_size = get_uint32_le(opt64_header->number_of_rva_and_sizes);
+    }
+
+    if (dir_size == 0 ||
+        (dir_size - 1) * sizeof(DATA_DIRECTORY) + sizeof(PE32_PLUS_HEADER) <
+            get_uint16_le(pe_header->optional_hdr_size)) {
+
+        fprintf(stderr, "Error: Unexpected optional header size\n");
+        goto cleanup;
+    }
+
+    for (i = 0; i < dir_size; i++) {
+        const DATA_DIRECTORY *const dir = &data_dir[i];
+
+        const uint32_t virtual_address = get_uint32_le(dir->virtual_address);
+        const uint32_t entry_size      = get_uint32_le(dir->size);
+        uint8_t       *dir_ptr         = mem_image + virtual_address;
+
+        static const char *const dir_names[] = {
+            "export table",
+            "import table",
+            "resource table",
+            "exception table",
+            "certificate table",
+            "base relocation_table",
+            "debug",
+            "architecture",
+            "global ptr",
+            "tls table",
+            "load config_table",
+            "bound import",
+            "iat"
+        };
+
+        const char *const name = (i < sizeof(dir_names) / sizeof(dir_names[0])) ? dir_names[i] : "unknown";
+
+        if (entry_size == 0) {
+            if (virtual_address)
+                fprintf(stderr, "Warning: Unexpected virtual address 0x%x for data directory entry %u of size 0\n",
+                        virtual_address, i);
+            continue;
+        }
+
+        if (virtual_address < va_start || virtual_address >= va_end ||
+            (virtual_address + entry_size) > va_end) {
+            fprintf(stderr, "Error: Invalid data directory %u (%s) with VA 0x%x and size 0x%x\n",
+                    i, name, virtual_address, entry_size);
+            goto cleanup;
+        }
+
+        printf("dir %u (%s): va=0x%x size=0x%x\n",
+               i, name, virtual_address, entry_size);
+
+        switch (i) {
+            /* We don't care about supporting exceptions, so just fill
+             * the exception table with zeroes.
+             */
+            case DIR_EXCEPTION_TABLE:
+            /* Base relocation table is used only if the exe is loaded at
+             * a different address than specified in image_base in the optional
+             * header.  We don't support that, so fill the base relocation
+             * table with zeroes.
+             */
+            case DIR_BASE_RELOCATION_TABLE:
+            /* Debug table is not needed, fill it with zeroes. */
+            case DIR_DEBUG:
+                memset(dir_ptr, 0, entry_size);
+                break;
+
+            /* Import address table is redundant, it is pointed to by the import table */
+            case DIR_IAT:
+                break;
+
+            case DIR_IMPORT_TABLE:
+                if (process_import_table(mem_image, va_end, virtual_address, entry_size,
+                                         pe_format == PE_FORMAT_PE32_PLUS))
+                    goto cleanup;
+                break;
+        }
+    }
+
     /*
      * https://learn.microsoft.com/en-us/windows/win32/debug/pe-format
      */
@@ -536,7 +656,10 @@ int exe_pe(const void *buf, size_t size)
      * - Minimize optional header size, it may be possible to use size 4
      */
 
+    error = 0;
+
+cleanup:
     free(mem_image);
 
-    return 0;
+    return error;
 }
