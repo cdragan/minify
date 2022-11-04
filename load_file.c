@@ -44,7 +44,7 @@ BUFFER load_file(const char *filename)
         return buf;
     }
 
-    buf.buf = (char *)malloc((size_t)size);
+    buf = buf_alloc((size_t)size);
     if ( ! buf.buf) {
         perror(NULL);
         fclose(file);
@@ -56,13 +56,12 @@ BUFFER load_file(const char *filename)
         fclose(file);
 
         free(buf.buf);
-        buf.buf = NULL;
+        buf.buf  = NULL;
+        buf.size = 0;
         return buf;
     }
 
     fclose(file);
-
-    buf.size = (size_t)size;
 
     return buf;
 }

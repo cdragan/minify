@@ -9,6 +9,7 @@ minify_src_files += arith_decode.c
 minify_src_files += arith_encode.c
 minify_src_files += bit_emit.c
 minify_src_files += bit_stream.c
+minify_src_files += buffer.c
 minify_src_files += find_repeats.c
 minify_src_files += load_file.c
 minify_src_files += lza_compress.c
@@ -22,6 +23,7 @@ arith_encoder_src_files += arith_encode_file.c
 arith_encoder_src_files += arith_encode.c
 arith_encoder_src_files += bit_emit.c
 arith_encoder_src_files += bit_stream.c
+arith_encoder_src_files += buffer.c
 arith_encoder_src_files += load_file.c
 
 tests += test_repeats

@@ -2,11 +2,6 @@
  * Copyright (c) 2022 Chris Dragan
  */
 
-#include <stddef.h>
-
-typedef struct {
-    char  *buf;
-    size_t size;
-} BUFFER;
+#include "buffer.h"
 
 BUFFER load_file(const char *filename);

@@ -3,6 +3,8 @@
  */
 
 #include "exe_pe.h"
+#include "buffer.h"
+#include "lza_compress.h"
 
 #include <assert.h>
 #include <stdint.h>
@@ -222,7 +224,7 @@ typedef struct {
 #define SECTION_MEM_READ               0x40000000U
 #define SECTION_MEM_WRITE              0x80000000U
 
-static void append(char *buf, size_t size, const char *str)
+static void append_str(char *buf, size_t size, const char *str)
 {
     const size_t buf_len  = strlen(buf);
     const size_t str_len  = strlen(str) + 1; /* Include terminating NUL */
@@ -242,25 +244,25 @@ static void decode_section_flags(char *buf, size_t size, uint32_t flags)
     buf[0] = 0;
 
     if (flags & SECTION_MEM_READ)
-        append(buf, size, " read");
+        append_str(buf, size, " read");
     if (flags & SECTION_MEM_WRITE)
-        append(buf, size, " write");
+        append_str(buf, size, " write");
     if (flags & SECTION_MEM_EXECUTE)
-        append(buf, size, " exec");
+        append_str(buf, size, " exec");
     if (flags & SECTION_MEM_DISCARDABLE)
-        append(buf, size, " discard");
+        append_str(buf, size, " discard");
     if (flags & SECTION_CNT_CODE)
-        append(buf, size, " code");
+        append_str(buf, size, " code");
     if (flags & SECTION_CNT_INITIALIZED_DATA)
-        append(buf, size, " data");
+        append_str(buf, size, " data");
     if (flags & SECTION_CNT_UNINITIALIZED_DATA)
-        append(buf, size, " udata");
+        append_str(buf, size, " udata");
 
     flags &= ~(SECTION_MEM_READ | SECTION_MEM_WRITE | SECTION_MEM_EXECUTE | SECTION_MEM_DISCARDABLE |
                SECTION_CNT_CODE | SECTION_CNT_INITIALIZED_DATA | SECTION_CNT_UNINITIALIZED_DATA);
 
     if (flags)
-        append(buf, size, " unknown");
+        append_str(buf, size, " unknown");
 }
 
 static const void *at_offset(const void *buf, uint32_t offset)
@@ -297,20 +299,77 @@ static uint32_t get_pe_offset(const void *buf, size_t size)
     return pe_offset;
 }
 
-static int process_import_table(uint8_t *mem_image,
-                                uint32_t image_size,
-                                uint32_t table_va,
-                                uint32_t table_size,
-                                int      is_64bit)
+static size_t push_iat_data(BUFFER *buf, const void *data, size_t size)
 {
-    IMPORT_DIR_ENTRY *import_dir_entry = (IMPORT_DIR_ENTRY *)(mem_image + table_va);
-    IMPORT_DIR_ENTRY *import_table_end = (IMPORT_DIR_ENTRY *)(mem_image + table_va + table_size);
+    if (size <= buf->size) {
+        memcpy(buf->buf, data, size);
 
+        buf->buf  += size;
+        buf->size -= size;
+    }
+
+    return size;
+}
+
+static size_t push_iat_string(BUFFER *buf, const char *str)
+{
+    return push_iat_data(buf, str, strlen(str) + 1);
+}
+
+static size_t push_iat_uint32(BUFFER *buf, uint32_t value)
+{
+    /* Note: assumes little-endian! */
+    return push_iat_data(buf, &value, 4);
+}
+
+static size_t push_iat_byte(BUFFER *buf, uint8_t byte)
+{
+    return push_iat_data(buf, &byte, 1);
+}
+
+static void clear_address_table(BUFFER process_va, uint32_t rva, int is_64bit)
+{
+    const uint32_t entry_size = is_64bit ? 8 : 4;
+
+    for (;;) {
+        uint64_t value;
+        uint8_t *entry = buf_at_offset(process_va, rva, entry_size);
+
+        if (is_64bit)
+            value = get_uint64_le(*(const uint64_le *)entry);
+        else
+            value = get_uint32_le(*(const uint32_le *)entry);
+
+        memset(entry, 0, entry_size);
+        rva += entry_size;
+
+        if ( ! value)
+            break;
+
+        entry = buf_at_offset(process_va, value, 3);
+
+        memset(entry, 0, 2 + strlen((char *)entry + 2));
+    }
+}
+
+static int process_import_table(BUFFER  process_va,
+                                BUFFER  import_table,
+                                BUFFER *iat_data,
+                                int     is_64bit)
+{
+    IMPORT_DIR_ENTRY       *import_dir_entry = (IMPORT_DIR_ENTRY *)import_table.buf;
+    IMPORT_DIR_ENTRY *const import_table_end = (IMPORT_DIR_ENTRY *)(import_table.buf + import_table.size);
+    BUFFER                  iat_buf_left     = *iat_data;
+    size_t                  iat_size         = 0;
+
+    /* Process each DLL */
     for ( ; import_dir_entry + 1 <= import_table_end; import_dir_entry++) {
         const uint32_t forwarder_chain          = get_uint32_le(import_dir_entry->forwarder_chain);
         const uint32_t name_rva                 = get_uint32_le(import_dir_entry->name_rva);
         const uint32_t import_address_table_rva = get_uint32_le(import_dir_entry->import_address_table_rva);
-        uint32_t       idx;
+        const uint32_t import_lookup_table_rva  = get_uint32_le(import_dir_entry->import_lookup_table_rva);
+        char    *const dll_name                 = (char *)buf_at_offset(process_va, name_rva, 1);
+        uint32_t       rva;
 
         /* Last entry */
         if ( ! import_address_table_rva)
@@ -318,39 +377,82 @@ static int process_import_table(uint8_t *mem_image,
 
         if (forwarder_chain) {
             fprintf(stderr, "Error: Forwarder chain is non-zero for %s, which is not supported\n",
-                    (const char *)(mem_image + name_rva));
+                    dll_name);
             return 1;
         }
 
-        printf("import %s\n", (const char *)(mem_image + name_rva));
+        printf("import %s\n", (const char *)dll_name);
 
-        idx = import_address_table_rva;
+        /* We will compress the IAT, so the executable will have to fill out the
+         * IAT on its own after it is loaded.
+         */
+        iat_size += push_iat_string(&iat_buf_left, dll_name);
+        iat_size += push_iat_uint32(&iat_buf_left, import_address_table_rva);
+
+        rva = import_address_table_rva;
         for (;;) {
-            uint64_t value;
-            uint32_t by_ordinal;
+            uint64_t    value;
+            const char *fun_name;
+            uint32_t    by_ordinal;
+            uint32_t    fun_name_rva;
+            uint16_t    hint;
 
             if (is_64bit) {
-                value      = get_uint64_le(*(const uint64_le *)(mem_image + idx));
-                idx       += 8;
+                value      = get_uint64_le(*(const uint64_le *)buf_at_offset(process_va, rva, 8));
+                rva       += 8;
                 by_ordinal = (uint32_t)(value >> 63);
             }
             else {
-                value      = get_uint32_le(*(const uint32_le *)(mem_image + idx));
-                idx       += 4;
+                value      = get_uint32_le(*(const uint32_le *)buf_at_offset(process_va, rva, 4));
+                rva       += 4;
                 by_ordinal = (uint32_t)(value >> 31);
             }
 
             if ( ! value)
                 break;
 
-            if (by_ordinal)
+            if (by_ordinal) {
                 printf("        ord                      %u\n", (uint32_t)value & 0xFFFFU);
-            else {
-                const uint32_t fun_name_rva = (uint32_t)value & 0x7FFFFFFFU;
-                printf("        name                     %s\n", (const char *)(mem_image + fun_name_rva + 2));
+                fprintf(stderr, "Error: Importing functions by ordinal number is not supported\n");
+                return 1;
             }
+
+            fun_name_rva = (uint32_t)value & 0x7FFFFFFFU;
+            fun_name     = (const char *)buf_at_offset(process_va, fun_name_rva, 3) + 2;
+            hint         = get_uint16_le(*(uint16_le *)buf_at_offset(process_va, fun_name_rva, 2));
+
+            printf("        name                     %s (hint %u)\n", fun_name, hint);
+
+            iat_size += push_iat_string(&iat_buf_left, fun_name);
         }
+
+        /* 0 (empty string) indicates end of symbols for this DLL */
+        iat_size += push_iat_byte(&iat_buf_left, 0);
+        if (iat_size >= iat_data->size)
+            break;
+
+        /* Clear the library name in the original executable, since the executable
+         * will have to load it manually.
+         */
+        memset(dll_name, 0, strlen(dll_name));
+
+        /* Clear the address tables */
+        clear_address_table(process_va, import_address_table_rva, is_64bit);
+        clear_address_table(process_va, import_lookup_table_rva, is_64bit);
     }
+
+    /* 0 (empty string) indicates end of symbols for this DLL */
+    iat_size += push_iat_byte(&iat_buf_left, 0);
+
+    if (iat_size > iat_data->size) {
+        fprintf(stderr, "Error: Failed to accommodate import address table\n");
+        return 1;
+    }
+
+    iat_data->size = iat_size;
+
+    /* Clear the import table */
+    memset(import_table.buf, 0, import_table.size);
 
     return 0;
 }
@@ -367,7 +469,11 @@ int exe_pe(const void *buf, size_t size)
     const PE32_PLUS_HEADER *opt64_header;
     const DATA_DIRECTORY   *data_dir;
     const SECTION_HEADER   *section_header;
-    uint8_t                *mem_image = NULL; /* Image of the program loaded in memory */
+    COMPRESSED_SIZES        compressed;
+    BUFFER                  mem_image;  /* Memory allocated to create processsed output */
+    BUFFER                  process_va; /* Image of the program loaded in memory */
+    BUFFER                  output;
+    BUFFER                  iat_data  = { NULL, 0 };
     uint32_t                machine;
     uint32_t                dir_size;
     const uint32_t          pe_offset = get_pe_offset(buf, size);
@@ -375,7 +481,7 @@ int exe_pe(const void *buf, size_t size)
     uint32_t                num_sections;
     uint32_t                va_start  = ~0U;
     uint32_t                va_end    = 0;
-    uint32_t                alloc_size;
+    size_t                  alloc_size;
     unsigned int            i;
     int                     error     = 1;
     uint16_t                pe_flags;
@@ -531,19 +637,26 @@ int exe_pe(const void *buf, size_t size)
         }
     }
 
-    /* Allocate memory for the exe image as it is loaded in memory
-     * - begin from VA 0
-     * - align up the end of reserved space to 4KB
-     * - multiply by 3x, so give 2x as much space
-     * The first portion up to aligned va_end is the original data with the original
-     * layout, which we will compress here and which will be decompressed at run time.
-     * This will not be written to the compressed exe.  After that we will have the
-     * decompressor code and compressed data.  The compressed data will not take
-     * as much as 2x space, but we just allocate extra memory to be sure to have
-     * enough wiggle room.
+    /* Here's the layout in memory:
+     *
+     * +--------------+-----+
+     * | process data | iat |
+     *
+     * - process data - This is the original process image layout in memory, as the executable
+     *   expects Windows to load it from file.  These are all the sections loaded from the file.
+     *   We make some modifications like zero out some areas which we don't need, which will reduce
+     *   its size after compression.  The executable expects Windows to load it at `image_base`
+     *   address specified in the optional header (PE32_HEADER or PE32_PLUS_HEADER).  We zero out
+     *   stuff like debug section, relocation table (we expect Windows to load it at a fixed
+     *   address, so no relocations are needed), and import table, which is not needed (see iat). 
+     * - iat - This is import address table which contains information used by the process
+     *   after decompression to fill out the real import address table in the original process.
      */
-    alloc_size = align_up(va_end, 0x1000) * 3;
-    mem_image  = (uint8_t *)calloc(alloc_size, 1);
+    va_end     = align_up(va_end, 0x1000);
+    alloc_size = va_end + estimate_compress_size(va_end);
+    mem_image  = buf_alloc(alloc_size);
+    process_va = buf_truncate(mem_image, va_end);
+    output     = buf_get_tail(mem_image, process_va.size);
 
     /* Load all sections into the right places */
     for (i = 0; i < num_sections; i++) {
@@ -552,7 +665,7 @@ int exe_pe(const void *buf, size_t size)
         const uint32_t    virtual_address     = get_uint32_le(section_header[i].virtual_address);
         const uint32_t    virtual_size        = get_uint32_le(section_header[i].virtual_size);
         const void *const src                 = at_offset(buf, pointer_to_raw_data);
-        uint8_t    *const dest                = mem_image + virtual_address;
+        uint8_t    *const dest                = buf_at_offset(process_va, virtual_address, virtual_size);
         const uint32_t    copy_size           = (size_of_raw_data < virtual_size) ? size_of_raw_data : virtual_size;
 
         memcpy(dest, src, copy_size);
@@ -581,7 +694,7 @@ int exe_pe(const void *buf, size_t size)
 
         const uint32_t virtual_address = get_uint32_le(dir->virtual_address);
         const uint32_t entry_size      = get_uint32_le(dir->size);
-        uint8_t       *dir_ptr         = mem_image + virtual_address;
+        const BUFFER   entry_buf       = buf_slice(process_va, virtual_address, entry_size);
 
         static const char *const dir_names[] = {
             "export table",
@@ -631,7 +744,7 @@ int exe_pe(const void *buf, size_t size)
             case DIR_BASE_RELOCATION_TABLE:
             /* Debug table is not needed, fill it with zeroes. */
             case DIR_DEBUG:
-                memset(dir_ptr, 0, entry_size);
+                memset(entry_buf.buf, 0, entry_buf.size);
                 break;
 
             /* Import address table is redundant, it is pointed to by the import table */
@@ -639,12 +752,27 @@ int exe_pe(const void *buf, size_t size)
                 break;
 
             case DIR_IMPORT_TABLE:
-                if (process_import_table(mem_image, va_end, virtual_address, entry_size,
+                iat_data = output;
+                if (process_import_table(process_va, entry_buf, &iat_data,
                                          pe_format == PE_FORMAT_PE32_PLUS))
                     goto cleanup;
+                iat_data.size = align_up((uint32_t)iat_data.size, 0x1000);
+                output = buf_get_tail(output, iat_data.size);
                 break;
+
+            default:
+                fprintf(stderr, "Error: Unsupported data directory table %u (%s)\n", i, name);
+                goto cleanup;
         }
     }
+
+    compressed = lza_compress(output.buf, output.size, process_va.buf, /*process_va.size +*/ iat_data.size, 128);
+
+    if ( ! compressed.lz)
+        goto cleanup;
+
+    printf("Original PE %zu bytes\n", size);
+    printf("Compressed  %zu bytes\n", compressed.lz);
 
     /*
      * https://learn.microsoft.com/en-us/windows/win32/debug/pe-format
@@ -659,7 +787,7 @@ int exe_pe(const void *buf, size_t size)
     error = 0;
 
 cleanup:
-    free(mem_image);
+    free(mem_image.buf);
 
     return error;
 }
