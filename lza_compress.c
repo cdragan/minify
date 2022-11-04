@@ -22,7 +22,7 @@ typedef struct {
 static void init_compress(COMPRESS *compress, void *buf, size_t size)
 {
     uint8_t     *dest       = (uint8_t *)buf;
-    const size_t chunk_size = size / 4;
+    const size_t chunk_size = size / LZS_NUM_STREAMS;
     uint32_t     i;
 
     memset(compress, 0, sizeof(*compress));
@@ -242,7 +242,7 @@ size_t estimate_compress_size(size_t src_size)
     if (src_size < 4096)
         src_size = 4096;
 
-    return src_size * 4;
+    return src_size * LZS_NUM_STREAMS;
 }
 
 COMPRESSED_SIZES lza_compress(void       *dest,
