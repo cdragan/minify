@@ -129,7 +129,7 @@ else
     STUB_CFLAGS += -MD
     STUB_CFLAGS += -Os -DNDEBUG
     STUB_CFLAGS += -fomit-frame-pointer
-    STUB_CFLAGS += -fno-stack-check -fno-stack-protector -fno-threadsafe-statics
+    STUB_CFLAGS += -fno-stack-check -fno-stack-protector
 
     STUB_LDFLAGS =
 endif
