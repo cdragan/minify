@@ -8,10 +8,10 @@
 #define main __stdcall WinMainCRTStartup
 #endif
 
+IMPORT_ADDRESS_TABLE import_address_table = INIT_IMPORT_ADDRESS_TABLE;
+
 int main(void)
 {
-    static IMPORT_ADDRESS_TABLE import_address_table = INIT_IMPORT_ADDRESS_TABLE;
-
     const char *import_names = import_address_table.import_names;
 
     do {
