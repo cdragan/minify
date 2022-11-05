@@ -5,10 +5,10 @@
 #include "load_imports.h"
 
 #ifdef _WIN32
-#define main __stdcall WinMainCRTStartup
-#endif
-
+_Noreturn void __stdcall WinMainCRTStartup(void)
+#else
 int main(void)
+#endif
 {
     static IMPORT_ADDRESS_TABLE import_address_table = INIT_IMPORT_ADDRESS_TABLE;
 
