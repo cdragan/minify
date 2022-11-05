@@ -178,6 +178,8 @@ endif
 
 out_dir = $(out_dir_base)/$(out_dir_config)
 
+out_stub_dir = $(out_dir_base)/stubs
+
 ##############################################################################
 # Functions for constructing target paths
 
@@ -253,24 +255,34 @@ $(foreach test, $(tests), $(eval $(call RUN_TEST,$(test))))
 # Stubs
 
 define STUB_RULE
-default: $$(out_dir)/$1.asm
+default: $$(out_stub_dir)/$1.asm
 
-$$(out_dir)/$1.asm: $$(out_dir)/$1$$(exe_suffix)
+$$(out_stub_dir)/$1.asm: $$(out_stub_dir)/$1$$(exe_suffix)
 	$$(call DISASM_COMMAND,$$@,$$^)
 
-$$(out_dir)/$1$$(exe_suffix): $$(out_dir)/stub_$1.$$(o_suffix)
+$$(out_stub_dir)/$1$$(exe_suffix): $$(addprefix $(out_stub_dir)/,$$(addsuffix .$$(o_suffix),$$(basename $$($1_sources))))
 	$$(LINK) $$(call LINKER_OUTPUT,$$@) $$^ $$(STUB_LDFLAGS)
 ifdef STUB_STRIP
 	$$(STUB_STRIP) $$@
 endif
 
-$$(out_dir)/stub_$1.$$(o_suffix): $1.c | $$(out_dir)
+all_stub_sources += $$($1_sources)
+endef
+
+define STUB_CC_RULE
+$$(out_stub_dir)/$$(basename $1).$$(o_suffix): $1 | $$(out_stub_dir)
 	$$(CC) $$(STUB_CFLAGS) $$(WFLAGS) -c $$(call COMPILER_OUTPUT,$$@) $$<
 endef
 
-stubs += load_imports
+$(out_stub_dir):
+	mkdir -p $@
+
+stubs += stub_load_imports
+stub_load_imports_sources += stub_load_imports.c
 
 $(foreach stub, $(stubs), $(eval $(call STUB_RULE,$(stub))))
+
+$(foreach src, $(sort $(all_stub_sources)), $(eval $(call STUB_CC_RULE,$(src))))
 
 ##############################################################################
 # Dependency files
