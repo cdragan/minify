@@ -11,7 +11,7 @@ BUFFER buf_alloc(size_t size)
 {
     BUFFER buf;
 
-    buf.buf = calloc(size, 1);
+    buf.buf = (uint8_t *)calloc(size, 1);
 
     if (buf.buf)
         buf.size = size;

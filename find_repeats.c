@@ -80,11 +80,6 @@ static uint32_t get_map_idx(const uint8_t *buf, size_t pos)
     return idx;
 }
 
-static int is_repeated_byte(const uint8_t *buf, size_t pos)
-{
-    return buf[pos] == buf[pos + 1];
-}
-
 static void set_offset(const uint8_t *buf, size_t pos, OFFSET_MAP *map)
 {
     const uint32_t  idx = get_map_idx(buf, pos) & 0xFFFFU;
@@ -102,7 +97,7 @@ static void set_offset(const uint8_t *buf, size_t pos, OFFSET_MAP *map)
      * for subsequent bytes.
      */
     if (map->last_pair_index == idx) {
-        assert(is_repeated_byte(buf, pos));
+        assert(buf[pos] == buf[pos + 1]);
         return;
     }
 
