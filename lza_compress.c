@@ -8,7 +8,7 @@
 #include "bit_emit.h"
 #include "bit_ops.h"
 #include "find_repeats.h"
-#include "lza_stream.h"
+#include "lza_defines.h"
 
 #include <assert.h>
 #include <string.h>
@@ -103,7 +103,7 @@ static void emit_length(BIT_EMITTER *emitter, size_t length)
      */
 
     assert(length >= 2);
-    assert(length <= 273);
+    assert(length <= MAX_LZA_SIZE);
 
     if (length <= 9) {
         emit_bits(emitter, 0, 1);
@@ -189,7 +189,7 @@ static void report_match(void *cookie, const uint8_t *buf, size_t pos, OCCURRENC
 {
     COMPRESS *const compress = (COMPRESS *)cookie;
 
-    assert(occurrence.length <= 273);
+    assert(occurrence.length <= MAX_LZA_SIZE);
 
     if (occurrence.last < 0) {
 

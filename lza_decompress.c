@@ -6,7 +6,7 @@
 
 #include "arith_decode.h"
 #include "bit_stream.h"
-#include "lza_stream.h"
+#include "lza_defines.h"
 
 #include <assert.h>
 #include <stdint.h>

@@ -4,6 +4,7 @@
 
 #include "find_repeats.h"
 #include "bit_ops.h"
+#include "lza_defines.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -142,7 +143,7 @@ static uint32_t compare(const uint8_t *buf, size_t left_pos, size_t right_pos, s
     const uint8_t *left      = &buf[left_pos];
     const uint8_t *right     = &buf[right_pos];
     const uint32_t right_end = (uint32_t)(size - right_pos);
-    const uint32_t end       = (right_end > 273) ? 273 : right_end;
+    const uint32_t end       = (right_end > MAX_LZA_SIZE) ? MAX_LZA_SIZE : right_end;
     uint32_t       length    = 2;
 
     assert(left[0] == right[0]);
