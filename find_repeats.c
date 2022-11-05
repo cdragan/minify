@@ -21,8 +21,10 @@ typedef struct {
 typedef struct {
     uint32_t       pair_ids[256 * 256];
     uint32_t       num_chunks;
-    uint32_t       first_free_chunk_id;
-    uint8_t        dummy_align[64 - 2 * sizeof(uint32_t)]; /* Align each chunk on cache line boundary */
+    uint32_t       first_free_chunk_id;     /* For allocating new chunks */
+    uint32_t       last_pair_index;         /* To avoid storing offsets for subsequent repeated bytes */
+    uint32_t       last_pos;                /* For assertions */
+    uint8_t        dummy_align[64 - 4 * sizeof(uint32_t)]; /* Align each chunk on cache line boundary */
     LOCATION_CHUNK chunks[1];
 } OFFSET_MAP;
 
@@ -45,6 +47,8 @@ static void init_offset_map(OFFSET_MAP *map, uint32_t num_chunks)
 
     map->num_chunks          = num_chunks;
     map->first_free_chunk_id = 0;
+    map->last_pair_index     = ~0U;
+    map->last_pos            = ~0U;
 }
 
 static OFFSET_MAP *alloc_offset_map(size_t file_size)
@@ -75,12 +79,35 @@ static uint32_t get_map_idx(const uint8_t *buf, size_t pos)
     return idx;
 }
 
+static int is_repeated_byte(const uint8_t *buf, size_t pos)
+{
+    return buf[pos] == buf[pos + 1];
+}
+
 static void set_offset(const uint8_t *buf, size_t pos, OFFSET_MAP *map)
 {
-    const uint32_t  idx      = get_map_idx(buf, pos) & 0xFFFFU;
-    uint32_t        chunk_id = map->pair_ids[idx];
+    const uint32_t  idx = get_map_idx(buf, pos) & 0xFFFFU;
+    uint32_t        chunk_id;
     uint32_t        new_id;
     LOCATION_CHUNK *chunk;
+
+#ifndef NDEBUG
+    assert(pos == map->last_pos + 1);
+    map->last_pos = (uint32_t)pos;
+#endif
+
+    /* Performance optimization.  If we encounter two subsequent identical bytes,
+     * only store the offset of the first such pair, don't store the offsets
+     * for subsequent bytes.
+     */
+    if (map->last_pair_index == idx) {
+        assert(is_repeated_byte(buf, pos));
+        return;
+    }
+
+    map->last_pair_index = idx;
+
+    chunk_id = map->pair_ids[idx];
 
     if (chunk_id != INVALID_ID) {
         chunk = &map->chunks[chunk_id];
@@ -154,6 +181,54 @@ static int calc_longrep_score(int longrep, uint32_t length)
     return lit_bits - longrep_bits;
 }
 
+static int calc_cond_longrep_score(int longrep, uint32_t length)
+{
+    return longrep < 0 ? 0 : calc_longrep_score(longrep, length);
+}
+
+static int is_8_byte_aligned(const uint8_t *ptr)
+{
+    return ! ((uintptr_t)ptr & 7U);
+}
+
+/* Determine length of a region filled with the same byte value */
+static size_t get_repeated_byte_length(const uint8_t *buf, size_t pos, size_t size)
+{
+    size_t        length = 1;
+    const uint8_t byte   = buf[pos];
+
+    assert(pos + 1 < size);
+
+    buf  += pos + 1;
+    size -= pos + 1;
+
+    /* Check the beginning byte by byte until we hit aligned address */
+    while (length < size && *buf == byte && ! is_8_byte_aligned(buf)) {
+        ++length;
+        ++buf;
+    }
+
+    /* Check 8 bytes at a time (perf optimization) */
+    if (*buf == byte) {
+        size_t         next_length = length + 8;
+        const uint64_t qword       = 0x0101010101010101ULL * (uint64_t)byte;
+
+        while (next_length <= size && *(uint64_t *)buf == qword) {
+            length       = next_length;
+            next_length += 8;
+            buf         += 8;
+        }
+    }
+
+    /* Check one byte at a time until we find a byte that does not match */
+    while (length < size && *buf == byte) {
+        ++length;
+        ++buf;
+    }
+
+    return length;
+}
+
 static OCCURRENCE find_occurrence_at_last_dist(const uint8_t *buf,
                                                size_t         pos,
                                                size_t         size,
@@ -192,8 +267,9 @@ static OCCURRENCE find_longest_occurrence(const uint8_t    *buf,
                                           const uint32_t    last_dist[],
                                           const OFFSET_MAP *map)
 {
-    OCCURRENCE occurrence = find_occurrence_at_last_dist(buf, pos, size, last_dist);
-    int        score      = (occurrence.last < 0) ? 0 : calc_longrep_score(occurrence.last, occurrence.length);
+    OCCURRENCE   occurrence      = find_occurrence_at_last_dist(buf, pos, size, last_dist);
+    int          score           = calc_cond_longrep_score(occurrence.last, occurrence.length);
+    const size_t repeated_length = get_repeated_byte_length(buf, pos, size);
 
     uint32_t chunk_id = map->pair_ids[get_map_idx(buf, pos)];
 
@@ -214,7 +290,28 @@ static OCCURRENCE find_longest_occurrence(const uint8_t    *buf,
             length   = compare(buf, old_pos, pos, size);
             distance = (uint32_t)pos - old_pos;
 
-            for (last = 3; last >= 0; last --)
+            /* For repeated bytes, we only store the offset of the first pair,
+             * so try to find shorter distance.
+             */
+            if (length <= repeated_length && distance > 1) {
+                const size_t max_len = get_repeated_byte_length(buf, pos - distance, size);
+
+                if (max_len > length) {
+                    const uint32_t diff = (uint32_t)(max_len - length);
+
+                    if (diff < distance)
+                        distance -= diff;
+                    else
+                        distance = 1;
+
+                    /* Recalculate length in case other bytes after the repeated
+                     * span can match.
+                     */
+                    length = compare(buf, pos - distance, pos, size);
+                }
+            }
+
+            for (last = 3; last >= 0; last--)
                 if (distance == last_dist[last])
                     break;
 
