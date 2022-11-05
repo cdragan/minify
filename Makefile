@@ -280,6 +280,11 @@ $(out_stub_dir):
 stubs += stub_load_imports
 stub_load_imports_sources += stub_load_imports.c
 
+stubs += stub_arith_decode
+stub_arith_decode_sources += stub_arith_decode.c
+stub_arith_decode_sources += arith_decode.c
+stub_arith_decode_sources += bit_stream.c
+
 $(foreach stub, $(stubs), $(eval $(call STUB_RULE,$(stub))))
 
 $(foreach src, $(sort $(all_stub_sources)), $(eval $(call STUB_CC_RULE,$(src))))
