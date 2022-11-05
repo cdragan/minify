@@ -96,7 +96,7 @@ ifeq ($(UNAME), Windows)
     STUB_LDFLAGS += -nologo
     STUB_LDFLAGS += -subsystem:windows
 
-    DISASM_COMMAND = dumpbin -disasm -section:.text -out:$1 $2
+    DISASM_COMMAND = dumpbin -disasm -section:.text -nologo -out:$1 $2
 else
     WFLAGS += -Wall -Wextra -Wno-unused-parameter -Wunused -Wno-missing-field-initializers
     WFLAGS += -Wshadow -Wformat=2 -Wconversion -Wdouble-promotion
@@ -135,8 +135,6 @@ else
     STUB_CFLAGS += -fno-stack-check -fno-stack-protector
 
     STUB_LDFLAGS =
-
-    DISASM_COMMAND = objdump -dS --x86-asm-syntax=intel $2 > $1
 endif
 
 ifeq ($(UNAME), Linux)
@@ -150,6 +148,7 @@ ifeq ($(UNAME), Linux)
     endif
     STUB_LDFLAGS += -Wl,--gc-sections -Wl,--as-needed
     STUB_STRIP = strip
+    DISASM_COMMAND = objdump -d -M intel $2 > $1
 endif
 
 ifeq ($(UNAME), Darwin)
@@ -163,6 +162,7 @@ ifeq ($(UNAME), Darwin)
     endif
     STUB_LDFLAGS += -Wl,-dead_strip
     STUB_STRIP = strip -x
+    DISASM_COMMAND = objdump -d --x86-asm-syntax=intel $2 > $1
 endif
 
 ##############################################################################
