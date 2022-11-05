@@ -92,8 +92,11 @@ ifeq ($(UNAME), Windows)
     STUB_CFLAGS += -nologo
     STUB_CFLAGS += -GR- -TP -EHa- -FS
 
-    STUB_LDFLAGS += -ltcg -nodefaultlib -stack:0x100000,0x100000
+    STUB_LDFLAGS += -nodefaultlib -stack:0x100000,0x100000
     STUB_LDFLAGS += -nologo
+    STUB_LDFLAGS += -subsystem:windows
+
+    DISASM_COMMAND = dumpbin -disasm -section:.text -out:$1 $2
 else
     WFLAGS += -Wall -Wextra -Wno-unused-parameter -Wunused -Wno-missing-field-initializers
     WFLAGS += -Wshadow -Wformat=2 -Wconversion -Wdouble-promotion
@@ -132,6 +135,8 @@ else
     STUB_CFLAGS += -fno-stack-check -fno-stack-protector
 
     STUB_LDFLAGS =
+
+    DISASM_COMMAND = objdump -dS --x86-asm-syntax=intel $2 > $1
 endif
 
 ifeq ($(UNAME), Linux)
@@ -248,7 +253,10 @@ $(foreach test, $(tests), $(eval $(call RUN_TEST,$(test))))
 # Stubs
 
 define STUB_RULE
-default: $$(out_dir)/$1$$(exe_suffix)
+default: $$(out_dir)/$1.asm
+
+$$(out_dir)/$1.asm: $$(out_dir)/$1$$(exe_suffix)
+	$$(call DISASM_COMMAND,$$@,$$^)
 
 $$(out_dir)/$1$$(exe_suffix): $$(out_dir)/stub_$1.$$(o_suffix)
 	$$(LINK) $$(call LINKER_OUTPUT,$$@) $$^ $$(STUB_LDFLAGS)
