@@ -86,6 +86,14 @@ ifeq ($(UNAME), Windows)
 
     COMPILER_OUTPUT = -Fo:$1
     LINKER_OUTPUT   = -out:$1
+
+    STUB_CFLAGS += -O1 -Oi -DNDEBUG -GL- -MT
+    STUB_CFLAGS += -DNOSTDLIB -D_NO_CRT_STDIO_INLINE -Zc:threadSafeInit- -GS- -Gs9999999
+    STUB_CFLAGS += -nologo
+    STUB_CFLAGS += -GR- -TP -EHa- -FS
+
+    STUB_LDFLAGS += -ltcg -nodefaultlib -stack:0x100000,0x100000
+    STUB_LDFLAGS += -nologo
 else
     WFLAGS += -Wall -Wextra -Wno-unused-parameter -Wunused -Wno-missing-field-initializers
     WFLAGS += -Wshadow -Wformat=2 -Wconversion -Wdouble-promotion
@@ -115,6 +123,15 @@ else
 
     COMPILER_OUTPUT = -o $1
     LINKER_OUTPUT   = -o $1
+
+    STUB_CFLAGS += -fvisibility=hidden
+    STUB_CFLAGS += -fPIC
+    STUB_CFLAGS += -MD
+    STUB_CFLAGS += -Os -DNDEBUG
+    STUB_CFLAGS += -fomit-frame-pointer
+    STUB_CFLAGS += -fno-stack-check -fno-stack-protector -fno-threadsafe-statics
+
+    STUB_LDFLAGS =
 endif
 
 ifeq ($(UNAME), Linux)
@@ -126,6 +143,8 @@ ifeq ($(UNAME), Linux)
         LTO_CFLAGS += -flto -fno-fat-lto-objects
         LDFLAGS    += -flto=auto -fuse-linker-plugin
     endif
+    STUB_LDFLAGS += -Wl,--gc-sections -Wl,--as-needed
+    STUB_STRIP = strip
 endif
 
 ifeq ($(UNAME), Darwin)
@@ -137,6 +156,8 @@ ifeq ($(UNAME), Darwin)
         LTO_CFLAGS += -flto
         LDFLAGS    += -flto
     endif
+    STUB_LDFLAGS += -Wl,-dead_strip
+    STUB_STRIP = strip -x
 endif
 
 ##############################################################################
@@ -222,6 +243,26 @@ $1: $$(call CMDLINE_PATH,$1)
 endef
 
 $(foreach test, $(tests), $(eval $(call RUN_TEST,$(test))))
+
+##############################################################################
+# Stubs
+
+define STUB_RULE
+default: $$(out_dir)/$1$$(exe_suffix)
+
+$$(out_dir)/$1$$(exe_suffix): $$(out_dir)/stub_$1.$$(o_suffix)
+	$$(LINK) $$(call LINKER_OUTPUT,$$@) $$^ $$(STUB_LDFLAGS)
+ifdef STUB_STRIP
+	$$(STUB_STRIP) $$@
+endif
+
+$$(out_dir)/stub_$1.$$(o_suffix): $1.c | $$(out_dir)
+	$$(CC) $$(STUB_CFLAGS) $$(WFLAGS) -c $$(call COMPILER_OUTPUT,$$@) $$<
+endef
+
+stubs += load_imports
+
+$(foreach stub, $(stubs), $(eval $(call STUB_RULE,$(stub))))
 
 ##############################################################################
 # Dependency files
