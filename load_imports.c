@@ -5,7 +5,7 @@
 #include "load_imports.h"
 
 #ifdef _WIN32
-_Noreturn void __stdcall WinMainCRTStartup(void)
+void __stdcall WinMainCRTStartup(void)
 #else
 int main(void)
 #endif
