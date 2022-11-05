@@ -99,7 +99,7 @@ static void emit_length(BIT_EMITTER *emitter, size_t length)
      * LZ77 length encoding:
      * 0+ 3 bits        Size encoded using 3 bits, gives the sizes range from 2 to 9.
      * 1+0+ 3 bits      Size encoded using 3 bits, gives the sizes range from 10 to 17.
-     * 1+1+ 8 bits      Size encoded using 8 bits, gives the sizes range from 18 to 273.
+     * 1+1+ n bits      Size encoded using n bits, gives the sizes range from 18 to (17 + (1 << n)).
      */
 
     assert(length >= 2);
@@ -115,7 +115,7 @@ static void emit_length(BIT_EMITTER *emitter, size_t length)
     }
     else {
         emit_bits(emitter, 3, 2);
-        emit_bits(emitter, length - 18, 8);
+        emit_bits(emitter, length - 18, LZA_LENGTH_TAIL_BITS);
     }
 }
 

@@ -22,7 +22,7 @@ static uint32_t decode_length(BIT_STREAM *stream)
         value += 8;
 
         if (data) {
-            bits   = 8;
+            bits   = LZA_LENGTH_TAIL_BITS;
             value += 8;
         }
     }

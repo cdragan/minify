@@ -2,7 +2,8 @@
  * Copyright (c) 2022 Chris Dragan
  */
 
-#define MAX_LZA_SIZE 273
+#define LZA_LENGTH_TAIL_BITS 11
+#define MAX_LZA_SIZE (17 + (1 << LZA_LENGTH_TAIL_BITS))
 
 enum LZ_STREAM {
     LZS_TYPE,
