@@ -50,6 +50,8 @@ uint64_t get_uint64_le(uint64_le data)
            ((uint64_t)data.bytes[7] << 56);
 }
 
+/* Reference: https://learn.microsoft.com/en-us/windows/win32/debug/pe-format */
+
 typedef struct {
     uint16_le mz_signature;
     uint8_t   garbage[0x3A];
@@ -66,6 +68,17 @@ typedef struct {
     uint16_le optional_hdr_size;
     uint16_le flags;
 } PE_HEADER;
+
+#define PE_MACHINE_X86_32  0x014C
+#define PE_MACHINE_X86_64  0x8664
+#define PE_MACHINE_AARCH64 0xAA64
+
+#define PE_FLAG_RELOCS_STRIPPED     0x0001
+#define PE_FLAG_EXECUTABLE_IMAGE    0x0002
+#define PE_FLAG_LARGE_ADDRESS_AWARE 0x0020
+#define PE_FLAG_32BIT_MACHINE       0x0100
+#define PE_FLAG_DLL                 0x2000
+#define PE_FLAG_UNSUPPORTED         0xD09C
 
 typedef struct {
     uint32_le virtual_address;
@@ -139,38 +152,6 @@ typedef struct {
     DATA_DIRECTORY rva_and_sizes[1];
 } PE32_PLUS_HEADER;
 
-typedef struct {
-    char      name[8];
-    uint32_le virtual_size;
-    uint32_le virtual_address;
-    uint32_le size_of_raw_data;
-    uint32_le pointer_to_raw_data;
-    uint32_le pointer_to_relocations;
-    uint32_le pointer_to_line_numbers;
-    uint16_le number_of_relocations;
-    uint16_le number_of_line_numbers;
-    uint32_le flags;
-} SECTION_HEADER;
-
-typedef struct {
-    uint32_le import_lookup_table_rva;
-    uint32_le time_stamp;
-    uint32_le forwarder_chain;
-    uint32_le name_rva;
-    uint32_le import_address_table_rva;
-} IMPORT_DIR_ENTRY;
-
-#define PE_MACHINE_X86_32  0x014C
-#define PE_MACHINE_X86_64  0x8664
-#define PE_MACHINE_AARCH64 0xAA64
-
-#define CHAR_RELOCS_STRIPPED     0x0001
-#define CHAR_EXECUTABLE_IMAGE    0x0002
-#define CHAR_LARGE_ADDRESS_AWARE 0x0020
-#define CHAR_32BIT_MACHINE       0x0100
-#define CHAR_DLL                 0x2000
-#define CHAR_UNSUPPORTED         0xD09C
-
 #define PE_FORMAT_PE32      0x010B
 #define PE_FORMAT_PE32_PLUS 0x020B
 
@@ -193,6 +174,27 @@ typedef struct {
 #define DIR_DELAY_IMPORT_DESCRIPTOR 13
 #define DIR_CLR_RUNTIME_HEADER      14
 #define DIR_RESERVED                15
+
+typedef struct {
+    char      name[8];
+    uint32_le virtual_size;
+    uint32_le virtual_address;
+    uint32_le size_of_raw_data;
+    uint32_le pointer_to_raw_data;
+    uint32_le pointer_to_relocations;
+    uint32_le pointer_to_line_numbers;
+    uint16_le number_of_relocations;
+    uint16_le number_of_line_numbers;
+    uint32_le flags;
+} SECTION_HEADER;
+
+typedef struct {
+    uint32_le import_lookup_table_rva;
+    uint32_le time_stamp;
+    uint32_le forwarder_chain;
+    uint32_le name_rva;
+    uint32_le import_address_table_rva;
+} IMPORT_DIR_ENTRY;
 
 #define SECTION_TYPE_NO_PAD            0x00000008U
 #define SECTION_CNT_CODE               0x00000020U
@@ -524,13 +526,13 @@ int exe_pe(const void *buf, size_t size)
 
     pe_flags = get_uint16_le(pe_header->flags);
 
-    if (pe_flags & CHAR_UNSUPPORTED) {
+    if (pe_flags & PE_FLAG_UNSUPPORTED) {
         fprintf(stderr, "Error: Unsupported bits set in characteristics field: 0x%x\n",
-                pe_flags & CHAR_UNSUPPORTED);
+                pe_flags & PE_FLAG_UNSUPPORTED);
         return 1;
     }
 
-    if (pe_flags & CHAR_DLL) {
+    if (pe_flags & PE_FLAG_DLL) {
         fprintf(stderr, "Error: Compressing DLLs is not supported\n");
         return 1;
     }
@@ -802,9 +804,6 @@ int exe_pe(const void *buf, size_t size)
     printf("Original    %zu bytes\n", size);
     printf("Compressed  %zu bytes\n", compressed.compressed);
 
-    /*
-     * https://learn.microsoft.com/en-us/windows/win32/debug/pe-format
-     */
     /* Hints on minimizing PE executables:
      *
      * - Put PE right after MZ, i.e. PE offset 0x04
