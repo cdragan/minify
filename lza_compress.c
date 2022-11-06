@@ -245,19 +245,17 @@ size_t estimate_compress_size(size_t src_size)
     return src_size * LZS_NUM_STREAMS;
 }
 
-COMPRESSED_SIZES lza_compress(void       *dest,
-                              size_t      dest_size,
-                              const void *src,
-                              size_t      src_size)
+COMPRESSED_SIZES lz_compress(void       *dest,
+                             size_t      dest_size,
+                             const void *src,
+                             size_t      src_size)
 {
-    COMPRESS       compress;
-    size_t         hdr_size;
-    size_t         stream_sizes[LZS_NUM_STREAMS];
-    const size_t   half_size    = dest_size / 2;
-    uint8_t *const arith_input  = (uint8_t *)dest + half_size;
-    uint8_t       *arith_output = (uint8_t *)dest;
+    COMPRESS compress;
+    size_t   stream_sizes[LZS_NUM_STREAMS];
+    size_t   hdr_size;
+    uint8_t  hdr[LZS_NUM_STREAMS * 4];
 
-    assert(half_size >= src_size);
+    assert(dest_size >= src_size);
 
     init_compress(&compress, dest, dest_size);
 
@@ -267,20 +265,46 @@ COMPRESSED_SIZES lza_compress(void       *dest,
     }
 
     finish_compress(&compress, stream_sizes);
-    assert(compress.sizes.lz <= half_size);
 
-    hdr_size = emit_header(arith_input, half_size, stream_sizes);
-    assert(hdr_size + compress.sizes.lz <= half_size);
+    hdr_size = emit_header(hdr, sizeof(hdr), stream_sizes);
+    assert(hdr_size + compress.sizes.lz <= dest_size);
+    if (hdr_size + compress.sizes.lz > dest_size) {
+        memset(&compress.sizes, 0, sizeof(compress.sizes));
+        return compress.sizes;
+    }
 
-    memcpy(arith_input + hdr_size, dest, compress.sizes.lz);
+    memmove((uint8_t *)dest + hdr_size, dest, compress.sizes.lz);
+    memcpy(dest, hdr, hdr_size);
     compress.sizes.lz += hdr_size;
 
-    compress.sizes.compressed = arith_encode(arith_output,
-                                             half_size - hdr_size,
-                                             arith_input,
-                                             compress.sizes.lz);
-
-    assert(compress.sizes.compressed <= half_size);
-
     return compress.sizes;
+}
+
+COMPRESSED_SIZES lza_compress(void       *dest,
+                              size_t      dest_size,
+                              const void *src,
+                              size_t      src_size)
+{
+    COMPRESSED_SIZES compressed;
+    const size_t     half_size    = dest_size / 2;
+    uint8_t *const   arith_input  = (uint8_t *)dest + half_size;
+    uint8_t         *arith_output = (uint8_t *)dest;
+
+    assert(half_size >= src_size);
+
+    compressed = lz_compress(arith_input, half_size, src, src_size);
+
+    if (compressed.lz == 0)
+        return compressed;
+
+    assert(compressed.lz <= half_size);
+
+    compressed.compressed = arith_encode(arith_output,
+                                       half_size,
+                                       arith_input,
+                                       compressed.lz);
+
+    assert(compressed.compressed <= half_size);
+
+    return compressed;
 }

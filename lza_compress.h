@@ -17,6 +17,11 @@ typedef struct {
 /* Returns size of the working buffer needed for compress() for the given input size */
 size_t estimate_compress_size(size_t src_size);
 
+COMPRESSED_SIZES lz_compress(void       *dest,
+                             size_t      dest_size,
+                             const void *src,
+                             size_t      src_size);
+
 COMPRESSED_SIZES lza_compress(void       *dest,
                               size_t      dest_size,
                               const void *src,
