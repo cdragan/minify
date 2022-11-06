@@ -3,6 +3,7 @@
  */
 
 #include "exe_pe.h"
+#include "arith_encode.h"
 #include "buffer.h"
 #include "lza_compress.h"
 
@@ -431,6 +432,10 @@ static int process_import_table(BUFFER  process_va,
         if (iat_size >= iat_data->size)
             break;
 
+        printf("        import address table     0x%x\n", import_address_table_rva);
+        printf("        iat size                 0x%x\n", rva - import_address_table_rva);
+        printf("        import lookup table      0x%x\n", import_lookup_table_rva);
+
         /* Clear the library name in the original executable, since the executable
          * will have to load it manually.
          */
@@ -474,6 +479,7 @@ int exe_pe(const void *buf, size_t size)
     BUFFER                  process_va; /* Image of the program loaded in memory */
     BUFFER                  output;
     BUFFER                  iat_data  = { NULL, 0 };
+    BUFFER                  lz_data   = { NULL, 0 };
     uint32_t                machine;
     uint32_t                dir_size;
     const uint32_t          pe_offset = get_pe_offset(buf, size);
@@ -639,8 +645,8 @@ int exe_pe(const void *buf, size_t size)
 
     /* Here's the layout in memory:
      *
-     * +--------------+-----+
-     * | process data | iat |
+     * +--------------+-----+---------------+-----------+-------------+
+     * | process data | iat | import loader | LZ77 data | LZ77 decomp |
      *
      * - process data - This is the original process image layout in memory, as the executable
      *   expects Windows to load it from file.  These are all the sections loaded from the file.
@@ -651,6 +657,11 @@ int exe_pe(const void *buf, size_t size)
      *   address, so no relocations are needed), and import table, which is not needed (see iat). 
      * - iat - This is import address table which contains information used by the process
      *   after decompression to fill out the real import address table in the original process.
+     * - import loader - The routine which loads the import tables using the preceding iat
+     *   and fills out the import tables in the process data.
+     * - LZ77 - All the preceding data compressed with LZ77.
+     * - LZ77 decomp - Decompressor for the LZ77.  It decompresses the preceding LZ77 data
+     *   into all the previous chunks.
      */
     va_end     = align_up(va_end, 0x1000);
     alloc_size = va_end + estimate_compress_size(va_end);
@@ -756,8 +767,9 @@ int exe_pe(const void *buf, size_t size)
                 if (process_import_table(process_va, entry_buf, &iat_data,
                                          pe_format == PE_FORMAT_PE32_PLUS))
                     goto cleanup;
+
                 iat_data.size = align_up((uint32_t)iat_data.size, 0x1000);
-                output = buf_get_tail(output, iat_data.size);
+                output        = buf_get_tail(output, iat_data.size);
                 break;
 
             default:
@@ -766,10 +778,26 @@ int exe_pe(const void *buf, size_t size)
         }
     }
 
-    compressed = lza_compress(output.buf, output.size, process_va.buf, process_va.size + iat_data.size);
+    /* TODO separate .text section into streams */
+
+    /* TODO add stub to restore .text section */
+
+    /* TODO add stub to import DLLs */
+
+    lz_data    = output;
+    compressed = lz_compress(lz_data.buf, lz_data.size, process_va.buf, process_va.size + iat_data.size);
 
     if ( ! compressed.lz)
         goto cleanup;
+
+    lz_data.size = align_up((uint32_t)compressed.lz, 0x1000);
+    output       = buf_get_tail(output, lz_data.size);
+
+    /* TODO add stub to decompress LZ */
+
+    compressed.compressed = arith_encode(output.buf, output.size, lz_data.buf, (uint32_t)compressed.lz);
+
+    /* TODO add stub for arithmetic decode */
 
     printf("Original    %zu bytes\n", size);
     printf("Compressed  %zu bytes\n", compressed.compressed);

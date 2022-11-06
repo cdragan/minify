@@ -242,7 +242,7 @@ size_t estimate_compress_size(size_t src_size)
     if (src_size < 4096)
         src_size = 4096;
 
-    return src_size * LZS_NUM_STREAMS;
+    return src_size * LZS_NUM_STREAMS * 2;
 }
 
 COMPRESSED_SIZES lz_compress(void       *dest,
