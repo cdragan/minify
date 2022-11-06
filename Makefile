@@ -134,8 +134,9 @@ else
     STUB_CFLAGS += -Os -DNDEBUG
     STUB_CFLAGS += -fomit-frame-pointer
     STUB_CFLAGS += -fno-stack-check -fno-stack-protector
+    STUB_CFLAGS += -ffunction-sections -fdata-sections
 
-    STUB_LDFLAGS =
+    STUB_LDFLAGS += -ffunction-sections -fdata-sections
 endif
 
 ifeq ($(UNAME), Linux)
@@ -161,6 +162,8 @@ ifeq ($(UNAME), Darwin)
         LTO_CFLAGS += -flto
         LDFLAGS    += -flto
     endif
+    STUB_CFLAGS  += -flto
+    STUB_LDFLAGS += -flto
     STUB_LDFLAGS += -Wl,-dead_strip
     STUB_STRIP = strip -x
     DISASM_COMMAND = objdump -d --x86-asm-syntax=intel $2 > $1

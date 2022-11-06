@@ -16,20 +16,12 @@ int main(int argc, char *argv[])
     BUFFER buf;
     char  *dest;
     char  *decoded;
-    char  *end = NULL;
-    long   window_size;
     size_t dest_size;
     size_t actual_size;
 
-    if (argc != 3) {
+    if (argc != 2) {
         fprintf(stderr, "Error: Invalid arguments\n");
-        fprintf(stderr, "Usage: arith_encode <FILE> <WINDOW_SIZE>\n");
-        return EXIT_FAILURE;
-    }
-
-    window_size = strtol(argv[2], &end, 0);
-    if ( ! end || *end || (window_size == 0 && errno) || (window_size <= 0) || (window_size > MAX_WINDOW_SIZE)) {
-        fprintf(stderr, "Invalid window size: %ld\n", window_size);
+        fprintf(stderr, "Usage: arith_encode <FILE>\n");
         return EXIT_FAILURE;
     }
 
@@ -45,7 +37,7 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    actual_size = arith_encode(dest, dest_size, buf.buf, buf.size, (uint32_t)window_size);
+    actual_size = arith_encode(dest, dest_size, buf.buf, buf.size);
 
     printf("Input:  %zu bytes\n", buf.size);
     printf("Output: %zu bytes\n", actual_size);
@@ -57,7 +49,7 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    arith_decode(decoded, buf.size, dest, actual_size, (uint32_t)window_size);
+    arith_decode(decoded, buf.size, dest, actual_size);
 
     if (memcmp(buf.buf, decoded, buf.size)) {
         fprintf(stderr, "Decoded data doesn't match original!\n");

@@ -32,44 +32,45 @@ int main(void)
     unsigned num_failed = 0;
 
     {
-        const size_t out_size = arith_encode(NULL, 0, NULL, 0, 256);
+        const size_t out_size = arith_encode(NULL, 0, NULL, 0);
         TEST(out_size == 0);
     }
 
     {
-        const uint8_t input    = 0;
-        uint8_t       output   = 0xAA;
-        uint8_t       decoded  = 0xAA;
-        const size_t  out_size = arith_encode(&output, 1, &input, 1, 256);
-        TEST(out_size == 1);
-        TEST(output == 0x0F);
-
-        arith_decode(&decoded, 1, &output, 1, 256);
-        TEST(decoded == input);
-    }
-
-    {
-        const uint8_t input    = 0xFF;
-        uint8_t       output   = 0xAA;
-        uint8_t       decoded  = 0xAA;
-        const size_t  out_size = arith_encode(&output, 1, &input, 1, 256);
-        TEST(out_size == 1);
-        TEST(output == 0xEF);
-
-        arith_decode(&decoded, 1, &output, 1, 256);
-        TEST(decoded == input);
-    }
-
-    {
-        const uint8_t input     = 0x0F;
+        const uint8_t input     = 0;
         uint8_t       output[2] = { 0xAA, 0xAA };
         uint8_t       decoded   = 0xAA;
-        const size_t  out_size  = arith_encode(output, 2, &input, 1, 256);
+        const size_t  out_size  = arith_encode(output, 2, &input, 1);
         TEST(out_size == 2);
-        TEST(output[0] == 0x32);
+        TEST(output[0] == 0x00);
         TEST(output[1] == 0xFF);
 
-        arith_decode(&decoded, 1, output, 2, 256);
+        arith_decode(&decoded, 1, &output, 1);
+        TEST(decoded == input);
+    }
+
+    {
+        const uint8_t input     = 0xFF;
+        uint8_t       output[2] = { 0xAA, 0xAA };
+        uint8_t       decoded   = 0xAA;
+        const size_t  out_size  = arith_encode(output, 2, &input, 1);
+        TEST(out_size == 2);
+        TEST(output[0] == 0xFF);
+        TEST(output[1] == 0x00);
+
+        arith_decode(&decoded, 1, &output, 1);
+        TEST(decoded == input);
+    }
+
+    {
+        const uint8_t input    = 0x0F;
+        uint8_t       output   = 0xAA;
+        uint8_t       decoded  = 0xAA;
+        const size_t  out_size = arith_encode(&output, 1, &input, 1);
+        TEST(out_size == 1);
+        TEST(output == 0x11);
+
+        arith_decode(&decoded, 1, &output, 1);
         TEST(decoded == input);
     }
 
@@ -77,12 +78,12 @@ int main(void)
         const uint8_t input     = 0xF0;
         uint8_t       output[2] = { 0xAA, 0xAA };
         uint8_t       decoded   = 0xAA;
-        const size_t  out_size  = arith_encode(output, 2, &input, 1, 256);
+        const size_t  out_size  = arith_encode(output, 2, &input, 1);
         TEST(out_size == 2);
-        TEST(output[0] == 0xCC);
-        TEST(output[1] == 0xFF);
+        TEST(output[0] == 0xEF);
+        TEST(output[1] == 0x7F);
 
-        arith_decode(&decoded, 1, output, 2, 256);
+        arith_decode(&decoded, 1, output, 2);
         TEST(decoded == input);
     }
 
@@ -90,12 +91,12 @@ int main(void)
         const uint8_t input     = 0x55;
         uint8_t       output[2] = { 0xAA, 0xAA };
         uint8_t       decoded   = 0xAA;
-        const size_t  out_size  = arith_encode(output, 2, &input, 1, 256);
+        const size_t  out_size  = arith_encode(output, 2, &input, 1);
         TEST(out_size == 2);
-        TEST(output[0] == 0x65);
-        TEST(output[1] == 0x3F);
+        TEST(output[0] == 0x57);
+        TEST(output[1] == 0x00);
 
-        arith_decode(&decoded, 1, output, 2, 256);
+        arith_decode(&decoded, 1, output, 2);
         TEST(decoded == input);
     }
 
@@ -103,48 +104,52 @@ int main(void)
         const uint8_t input     = 0xAA;
         uint8_t       output[2] = { 0xAA, 0xAA };
         uint8_t       decoded   = 0xAA;
-        const size_t  out_size  = arith_encode(output, 2, &input, 1, 256);
+        const size_t  out_size  = arith_encode(output, 2, &input, 1);
         TEST(out_size == 2);
-        TEST(output[0] == 0x9A);
-        TEST(output[1] == 0xBF);
+        TEST(output[0] == 0xAA);
+        TEST(output[1] == 0x7F);
 
-        arith_decode(&decoded, 1, output, 2, 256);
+        arith_decode(&decoded, 1, output, 2);
         TEST(decoded == input);
     }
 
     {
-        const uint8_t input    = 0x7F;
-        uint8_t       output   = 0xAA;
-        uint8_t       decoded  = 0xAA;
-        const size_t  out_size = arith_encode(&output, 1, &input, 1, 256);
-        TEST(out_size == 1);
-        TEST(output == 0x7D);
+        const uint8_t input     = 0x7F;
+        uint8_t       output[2] = { 0xAA, 0xAA };
+        uint8_t       decoded   = 0xAA;
+        const size_t  out_size  = arith_encode(output, 2, &input, 1);
+        TEST(out_size == 2);
+        TEST(output[0] == 0x7F);
+        TEST(output[1] == 0x00);
 
-        arith_decode(&decoded, 1, &output, 1, 256);
+        arith_decode(&decoded, 1, &output, 1);
         TEST(decoded == input);
     }
 
     {
-        const uint8_t input    = 0x80;
-        uint8_t       output   = 0xAA;
-        uint8_t       decoded  = 0xAA;
-        const size_t  out_size = arith_encode(&output, 1, &input, 1, 256);
-        TEST(out_size == 1);
-        TEST(output == 0x81);
+        const uint8_t input     = 0x80;
+        uint8_t       output[2] = { 0xAA, 0xAA };
+        uint8_t       decoded   = 0xAA;
+        const size_t  out_size  = arith_encode(output, 2, &input, 1);
+        TEST(out_size == 2);
+        TEST(output[0] == 0x80);
+        TEST(output[1] == 0xFF);
 
-        arith_decode(&decoded, 1, &output, 1, 256);
+        arith_decode(&decoded, 1, &output, 1);
         TEST(decoded == input);
     }
 
     {
         const uint8_t input[3]   = { 0x00, 0x00, 0x00 };
-        uint8_t       output     = 0xAA;
+        uint8_t       output[3]  = { 0xAA, 0xAA, 0xAA };
         uint8_t       decoded[3] = { 0xAA, 0xAA, 0xAA };
-        const size_t  out_size   = arith_encode(&output, 1, input, 3, 256);
-        TEST(out_size == 1);
-        TEST(output == 0x07);
+        const size_t  out_size   = arith_encode(output, 3, input, 3);
+        TEST(out_size == 3);
+        TEST(output[0] == 0x00);
+        TEST(output[1] == 0x00);
+        TEST(output[2] == 0x1F);
 
-        arith_decode(decoded, 3, &output, 1, 256);
+        arith_decode(decoded, 3, &output, 1);
         TEST(decoded[0] == input[0]);
         TEST(decoded[1] == input[1]);
         TEST(decoded[2] == input[2]);
@@ -152,13 +157,15 @@ int main(void)
 
     {
         const uint8_t input[3]   = { 0xFF, 0xFF, 0xFF };
-        uint8_t       output     = 0xAA;
+        uint8_t       output[3]  = { 0xAA, 0xAA, 0xAA };
         uint8_t       decoded[3] = { 0xAA, 0xAA, 0xAA };
-        const size_t  out_size   = arith_encode(&output, 1, input, 3, 256);
-        TEST(out_size == 1);
-        TEST(output == 0xF8);
+        const size_t  out_size   = arith_encode(output, 3, input, 3);
+        TEST(out_size == 3);
+        TEST(output[0] == 0xFF);
+        TEST(output[1] == 0xFF);
+        TEST(output[2] == 0xE0);
 
-        arith_decode(decoded, 3, &output, 1, 256);
+        arith_decode(decoded, 3, &output, 1);
         TEST(decoded[0] == input[0]);
         TEST(decoded[1] == input[1]);
         TEST(decoded[2] == input[2]);
@@ -166,31 +173,15 @@ int main(void)
 
     {
         const uint8_t input[3]   = { 0x40, 0x00, 0x00 };
-        uint8_t       output[2]  = { 0xAA, 0xAA };
+        uint8_t       output[3]  = { 0xAA, 0xAA, 0xAA };
         uint8_t       decoded[3] = { 0xAA, 0xAA, 0xAA };
-        const size_t  out_size   = arith_encode(output, 2, input, 3, 256);
-        TEST(out_size == 2);
-        TEST(output[0] == 0x55);
-        TEST(output[1] == 0x80);
-
-        arith_decode(decoded, 3, output, 2, 256);
-        TEST(decoded[0] == input[0]);
-        TEST(decoded[1] == input[1]);
-        TEST(decoded[2] == input[2]);
-    }
-
-    {
-        const uint8_t input[3]   = { 0xFF, 0xFF, 0x00 };
-        uint8_t       output[4]  = { 0xAA, 0xAA, 0xAA, 0xAA };
-        uint8_t       decoded[3] = { 0xAA, 0xAA, 0xAA };
-        const size_t  out_size   = arith_encode(output, 4, input, 3, 256);
-        TEST(out_size == 4);
-        TEST(output[0] == 0xF0);
+        const size_t  out_size   = arith_encode(output, 3, input, 3);
+        TEST(out_size == 3);
+        TEST(output[0] == 0x41);
         TEST(output[1] == 0xF0);
-        TEST(output[2] == 0xF1);
-        TEST(output[3] == 0x00);
+        TEST(output[2] == 0x80);
 
-        arith_decode(decoded, 3, output, 4, 256);
+        arith_decode(decoded, 3, output, 3);
         TEST(decoded[0] == input[0]);
         TEST(decoded[1] == input[1]);
         TEST(decoded[2] == input[2]);
@@ -198,14 +189,15 @@ int main(void)
 
     {
         const uint8_t input[3]   = { 0xFF, 0xFF, 0x00 };
-        uint8_t       output[2]  = { 0xAA, 0xAA };
+        uint8_t       output[3]  = { 0xAA, 0xAA, 0xAA };
         uint8_t       decoded[3] = { 0xAA, 0xAA, 0xAA };
-        const size_t  out_size   = arith_encode(output, 2, input, 3, 8);
-        TEST(out_size == 2);
-        TEST(output[0] == 0xF3);
-        TEST(output[1] == 0xC1);
+        const size_t  out_size   = arith_encode(output, 3, input, 3);
+        TEST(out_size == 3);
+        TEST(output[0] == 0xFF);
+        TEST(output[1] == 0xFB);
+        TEST(output[2] == 0x24);
 
-        arith_decode(decoded, 3, output, 2, 8);
+        arith_decode(decoded, 3, output, 3);
         TEST(decoded[0] == input[0]);
         TEST(decoded[1] == input[1]);
         TEST(decoded[2] == input[2]);
@@ -215,14 +207,14 @@ int main(void)
         const uint8_t input[3]   = { 0x55, 0xAA, 0x55 };
         uint8_t       output[4]  = { 0xAA, 0xAA, 0xAA, 0xAA };
         uint8_t       decoded[3] = { 0xAA, 0xAA, 0xAA };
-        const size_t  out_size   = arith_encode(output, 4, input, 3, 64);
+        const size_t  out_size   = arith_encode(output, 4, input, 3);
         TEST(out_size == 4);
-        TEST(output[0] == 0x65);
-        TEST(output[1] == 0x57);
-        TEST(output[2] == 0x9E);
-        TEST(output[3] == 0x7F);
+        TEST(output[0] == 0x57);
+        TEST(output[1] == 0x53);
+        TEST(output[2] == 0xE4);
+        TEST(output[3] == 0xFF);
 
-        arith_decode(decoded, 3, output, 4, 64);
+        arith_decode(decoded, 3, output, 4);
         TEST(decoded[0] == input[0]);
         TEST(decoded[1] == input[1]);
         TEST(decoded[2] == input[2]);
@@ -237,10 +229,10 @@ int main(void)
                                       0xAA };
         uint8_t       decoded[16] = { 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA,
                                       0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA };
-        const size_t  out_size    = arith_encode(output, 17, input, 16, 128);
+        const size_t  out_size    = arith_encode(output, 17, input, 16);
         TEST(out_size == 17);
 
-        arith_decode(decoded, 16, output, 17, 128);
+        arith_decode(decoded, 16, output, 17);
         TEST(decoded[0]  == input[0]);
         TEST(decoded[1]  == input[1]);
         TEST(decoded[2]  == input[2]);
@@ -263,14 +255,14 @@ int main(void)
     {
         const uint8_t input[16]   = { 0xCF, 0xFA, 0xED, 0xFE, 0x07, 0x00, 0x00, 0x01,
                                       0x03, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00 };
-        uint8_t       output[14]  = { 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA,
-                                      0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA };
+        uint8_t       output[12]  = { 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA,
+                                      0xAA, 0xAA, 0xAA, 0xAA };
         uint8_t       decoded[16] = { 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA,
                                       0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA };
-        const size_t  out_size    = arith_encode(output, 14, input, 16, 128);
-        TEST(out_size == 14);
+        const size_t  out_size    = arith_encode(output, 14, input, 16);
+        TEST(out_size == 12);
 
-        arith_decode(decoded, 16, output, 14, 128);
+        arith_decode(decoded, 16, output, 12);
         TEST(decoded[0]  == input[0]);
         TEST(decoded[1]  == input[1]);
         TEST(decoded[2]  == input[2]);
@@ -295,26 +287,24 @@ int main(void)
         int      step;
 
         for (step = 0; step < 100; step++) {
-            uint8_t  input[1024];
-            uint8_t  output[1280];
-            uint8_t  decoded[1024];
-            uint32_t window_size;
-            size_t   in_size;
-            size_t   out_size;
-            size_t   i;
+            uint8_t input[1024];
+            uint8_t output[1280];
+            uint8_t decoded[1024];
+            size_t  in_size;
+            size_t  out_size;
+            size_t  i;
 
             for (i = 0; i < sizeof(input); i++)
                 input[i] = lcg(&lcg_state) & 0xFFU;
 
-            in_size     = (size_t)(512 + (lcg(&lcg_state) & 511));
-            window_size = (uint8_t)(8 + (lcg(&lcg_state) & 0x1FFU));
+            in_size = (size_t)(512 + (lcg(&lcg_state) & 511));
 
             memset(output, 0xAA, sizeof(output));
             memset(decoded, 0xAA, sizeof(decoded));
 
-            out_size = arith_encode(output, sizeof(output), input, in_size, window_size);
+            out_size = arith_encode(output, sizeof(output), input, in_size);
 
-            arith_decode(decoded, in_size, output, out_size, window_size);
+            arith_decode(decoded, in_size, output, out_size);
 
             if (memcmp(input, decoded, in_size)) {
                 ++num_failed;

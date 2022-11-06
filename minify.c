@@ -47,7 +47,7 @@ int main(int argc, char *argv[])
 
     decompressed = dest + compr_buffer_size;
 
-    compressed = lza_compress(dest, compr_buffer_size, buf.buf, buf.size, 128);
+    compressed = lza_compress(dest, compr_buffer_size, buf.buf, buf.size);
 
     if ( ! compressed.lz)
         return EXIT_FAILURE;

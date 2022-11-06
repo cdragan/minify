@@ -15,8 +15,7 @@ uint32_t compressed_size;
 
 int main(void)
 {
-    const uint32_t window_size = *(uint16_t *)compressed;
-    arith_decode(input, scratch_size, compressed + 2, compressed_size - 2, window_size);
+    arith_decode(input, scratch_size, compressed, compressed_size);
 
     return 0;
 }

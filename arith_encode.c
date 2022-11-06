@@ -18,9 +18,9 @@ typedef struct {
     uint32_t    num_pending;
 } ENCODER;
 
-static void init_encoder(ENCODER *encoder, void *dest, size_t size, uint32_t window_size)
+static void init_encoder(ENCODER *encoder, void *dest, size_t size)
 {
-    init_model(&encoder->model, window_size);
+    init_model(&encoder->model);
     init_bit_emitter(&encoder->emitter, (uint8_t *)dest, size);
 
     encoder->low         = 0;
@@ -82,7 +82,7 @@ static size_t arith_emit_tail(ENCODER *encoder)
     return emit_tail(&encoder->emitter);
 }
 
-size_t arith_encode(void *dest, size_t max_dest_size, const void *src, size_t size, uint32_t window_size)
+size_t arith_encode(void *dest, size_t max_dest_size, const void *src, size_t size)
 {
     ENCODER              encoder;
     const uint8_t       *src_byte    = (const uint8_t *)src;
@@ -91,7 +91,7 @@ size_t arith_encode(void *dest, size_t max_dest_size, const void *src, size_t si
     if ( ! size)
         return 0;
 
-    init_encoder(&encoder, dest, max_dest_size, window_size);
+    init_encoder(&encoder, dest, max_dest_size);
 
     for (; src_byte < src_end; ++src_byte) {
         uint32_t input_byte = *src_byte | 0x100U;

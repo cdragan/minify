@@ -766,13 +766,13 @@ int exe_pe(const void *buf, size_t size)
         }
     }
 
-    compressed = lza_compress(output.buf, output.size, process_va.buf, process_va.size + iat_data.size, 64);
+    compressed = lza_compress(output.buf, output.size, process_va.buf, process_va.size + iat_data.size);
 
     if ( ! compressed.lz)
         goto cleanup;
 
-    printf("Original PE %zu bytes\n", size);
-    printf("Compressed  %zu bytes\n", compressed.lz);
+    printf("Original    %zu bytes\n", size);
+    printf("Compressed  %zu bytes\n", compressed.compressed);
 
     /*
      * https://learn.microsoft.com/en-us/windows/win32/debug/pe-format

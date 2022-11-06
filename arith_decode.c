@@ -8,39 +8,22 @@
 #include <assert.h>
 #include <string.h>
 
-void init_model(MODEL *model, uint32_t window_size)
+void init_model(MODEL *model)
 {
-    assert(window_size <= MAX_WINDOW_SIZE);
-
-    model->prob[0]      = 1;
-    model->prob[1]      = 1;
-    model->history_prev = 0;
-    model->history_next = 0;
-    model->window_size  = window_size;
+    model->prob[0] = 33;
+    model->prob[1] = 33;
+    model->history = 0xAAAAAAAAAAAAAAAAULL;
 }
 
 void update_model(MODEL *model, uint32_t bit)
 {
-    const uint32_t window_size = model->window_size;
-    uint32_t       history_size;
-
     assert(bit <= 1);
 
     ++model->prob[bit];
 
-    model->history[model->history_next++] = (uint8_t)bit;
+    --model->prob[model->history >> 63];
 
-    model->history_next %= MAX_WINDOW_SIZE * 2;
-
-    assert(model->history_next != model->history_prev);
-    history_size = model->history_next - model->history_prev;
-    if (model->history_next < model->history_prev)
-        history_size += MAX_WINDOW_SIZE * 2;
-
-    if (history_size > window_size) {
-        --model->prob[model->history[model->history_prev]];
-        model->history_prev = (model->history_prev + 1) % (MAX_WINDOW_SIZE * 2);
-    }
+    model->history = (model->history << 1) | bit;
 }
 
 typedef struct {
@@ -51,9 +34,9 @@ typedef struct {
     uint32_t   value;
 } DECODER;
 
-static void init_decoder(DECODER *decoder, const void *src, size_t src_size, uint32_t window_size)
+static void init_decoder(DECODER *decoder, const void *src, size_t src_size)
 {
-    init_model(&decoder->model, window_size);
+    init_model(&decoder->model);
     init_bit_stream(&decoder->stream, src, src_size);
     decoder->low   = 0;
     decoder->high  = ~0U;
@@ -96,14 +79,14 @@ static uint8_t decode_next_bit(DECODER *decoder)
     return out_bit;
 }
 
-void arith_decode(void *dest, size_t dest_size, const void *src, size_t src_size, uint32_t window_size)
+void arith_decode(void *dest, size_t dest_size, const void *src, size_t src_size)
 {
     DECODER decoder;
 
     assert(src_size);
     assert(dest_size);
 
-    init_decoder(&decoder, src, src_size, window_size);
+    init_decoder(&decoder, src, src_size);
 
     do {
         uint32_t out_byte = 1;
