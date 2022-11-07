@@ -43,6 +43,19 @@ test_bit_stream_src_files += bit_emit.c
 test_bit_stream_src_files += bit_stream.c
 test_bit_stream_src_files += test_bit_stream.c
 
+stubs += stub_load_imports
+stub_load_imports_sources += stub_load_imports.c
+
+stubs += stub_arith_decode
+stub_arith_decode_sources += arith_decode.c
+stub_arith_decode_sources += bit_stream.c
+stub_arith_decode_sources += stub_arith_decode.c
+
+stubs += stub_lz_decompress
+stub_lz_decompress_sources += bit_stream.c
+stub_lz_decompress_sources += lz_decompress.c
+stub_lz_decompress_sources += stub_lz_decompress.c
+
 ##############################################################################
 # Determine target OS
 
@@ -280,14 +293,6 @@ endef
 
 $(out_stub_dir):
 	mkdir -p $@
-
-stubs += stub_load_imports
-stub_load_imports_sources += stub_load_imports.c
-
-stubs += stub_arith_decode
-stub_arith_decode_sources += stub_arith_decode.c
-stub_arith_decode_sources += arith_decode.c
-stub_arith_decode_sources += bit_stream.c
 
 $(foreach stub, $(stubs), $(eval $(call STUB_RULE,$(stub))))
 
