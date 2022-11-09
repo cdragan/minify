@@ -3,19 +3,14 @@
  */
 
 #include "arith_decode.h"
+#include "pe_common.h"
 
-#ifdef _WIN32
-#define main __stdcall WinMainCRTStartup
-#endif
+const LIVE_LAYOUT *live_layout;
 
-uint8_t *input;
-uint32_t scratch_size;
-uint8_t *compressed;
-uint32_t compressed_size;
-
-int main(void)
+int STDCALL loader(void)
 {
-    arith_decode(input, scratch_size, compressed, compressed_size);
+    arith_decode(live_layout->lz77_data, live_layout->lz77_data_size,
+                 live_layout->comp_data, live_layout->comp_data_size);
 
-    return 0;
+    return live_layout->lz77_decomp(live_layout);
 }

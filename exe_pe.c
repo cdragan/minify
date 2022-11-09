@@ -49,14 +49,16 @@
  *                       |    program     |    this is also the begining of the second section
  *                       |                |
  * arith_decoder_rva --> +----------------+ <- Arithmetic decoder is stored here;
- *                       |   arithmetic   |    this rva is also the new entry_point_rva
- *                       |    decoder     |
- * import_dir_rva -----> +----------------+ <- Used to load this by Windows, address NOT aligned on 4K
+ *                       |   arithmetic   |    this rva is also the new entry_point_rva;
+ *                       |    decoder     |    address NOT aligned on 4K
+ * import_dir_rva -----> +----------------+ <- Used to load this by Windows; address NOT aligned on 4K
  *                       |  mini import   |
  *                       |   directory    |
  * mini_iat_rva -------> +----------------+ <- Import Address Table loaded by the OS, which is used
- *                       |   mini iat     |    by the import loader, address is NOT aligned on 4K
- * end_rva ------------> +----------------+ <- End of used address space, address NOT aligned on 4K
+ *                       |   mini iat     |    by the import loader; address NOT aligned on 4K
+ * live_layout_rva ----> +----------------+ <- Live layout structure used by loaders; address NOT
+ *                       |  live layout   |    aligned on 4K
+ * end_rva ------------> +----------------+ <- End of used address space; address NOT aligned on 4K
  */
 
 typedef struct {
@@ -69,6 +71,7 @@ typedef struct {
     uint32_t arith_decoder_rva;
     uint32_t import_dir_rva;
     uint32_t mini_iat_rva;
+    uint32_t live_layout_rva;
     uint32_t end_rva;
 } LAYOUT;
 

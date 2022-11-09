@@ -2,17 +2,11 @@
  * Copyright (c) 2022 Chris Dragan
  */
 
-#include "pe_load_imports.h"
+#include "pe_common.h"
 
-#ifdef _WIN32
-#define main __stdcall WinMainCRTStartup
-#endif
-
-IMPORT_ADDRESS_TABLE import_address_table = INIT_IMPORT_ADDRESS_TABLE;
-
-int main(void)
+int STDCALL loader(const LIVE_LAYOUT *layout)
 {
-    const char *import_names = import_address_table.import_names;
+    const char *import_names = (const char *)layout->iat;
 
     do {
         const char    *name = import_names++;
@@ -21,10 +15,10 @@ int main(void)
 
         do { } while (*(import_names++));
 
-        module = import_address_table.load_library(name);
+        module = layout->mini_iat->load_library(name);
 
         /* Note: assume little-endian */
-        func = (FUNCTION_TYPE *)(import_address_table.base_address +
+        func = (FUNCTION_TYPE *)((uintptr_t)(layout->image_base) +
                                  (uint32_t)(uint8_t)import_names[0] +
                                  ((uint32_t)(uint8_t)import_names[1] << 8) +
                                  ((uint32_t)(uint8_t)import_names[2] << 16) +
@@ -36,7 +30,7 @@ int main(void)
 
             do { } while (*(import_names++));
 
-            *func = import_address_table.get_proc_address(module, name);
+            *func = layout->mini_iat->get_proc_address(module, name);
 
             ++func;
         } while (*import_names);
@@ -44,5 +38,5 @@ int main(void)
         ++import_names;
     } while (*import_names);
 
-    return 0;
+    return layout->entry_point();
 }

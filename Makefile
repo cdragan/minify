@@ -109,6 +109,7 @@ ifeq ($(UNAME), Windows)
     STUB_LDFLAGS += -nodefaultlib -stack:0x100000,0x100000
     STUB_LDFLAGS += -nologo
     STUB_LDFLAGS += -subsystem:windows
+    STUB_LDFLAGS += -entry:loader
 
     DISASM_COMMAND = dumpbin -disasm -section:.text -nologo -out:$1 $2
 else
@@ -150,6 +151,7 @@ else
     STUB_CFLAGS += -ffunction-sections -fdata-sections
 
     STUB_LDFLAGS += -ffunction-sections -fdata-sections
+    STUB_LDFLAGS += -Wl,-e -Wl,_loader
 endif
 
 ifeq ($(UNAME), Linux)

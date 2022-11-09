@@ -3,20 +3,13 @@
  */
 
 #include "lza_decompress.h"
+#include "pe_common.h"
 
-#include <stdint.h>
-
-#ifdef _WIN32
-#define main __stdcall WinMainCRTStartup
-#endif
-
-uint8_t       *output;
-uint32_t       output_size;
-const uint8_t *input;
-
-int main(void)
+int STDCALL loader(const LIVE_LAYOUT *layout)
 {
-    lz_decompress(output, output_size, input);
+    lz_decompress(layout->image_base,
+                  (uint32_t)(layout->lz77_data - layout->image_base),
+                  layout->lz77_data);
 
-    return 0;
+    return layout->import_loader(layout);
 }
