@@ -386,10 +386,10 @@ typedef struct {
     SECTION_HEADER section_placeholder[2];
 } MINIMAL_PE_HEADER;
 
-static void fill_pe_header(MINIMAL_PE_HEADER *new_header,
-                           const LAYOUT      *layout,
-                           const PE_HEADER   *pe_header,
-                           const PE32_HEADER *opt_header)
+static uint32_t fill_pe_header(MINIMAL_PE_HEADER *new_header,
+                               const LAYOUT      *layout,
+                               const PE_HEADER   *pe_header,
+                               const PE32_HEADER *opt_header)
 {
     DATA_DIRECTORY      *data_dir;
     SECTION_HEADER      *section_header;
@@ -400,6 +400,7 @@ static void fill_pe_header(MINIMAL_PE_HEADER *new_header,
     static const char    sec_text[8] = "packed";
     const uint32_t       sec_flags   = SECTION_CNT_CODE | SECTION_MEM_EXECUTE |
                                        SECTION_MEM_READ | SECTION_MEM_WRITE;
+    uint32_t             final_size;
 
     memcpy(&new_header->mz_signature, mz32, sizeof(mz32));
     new_header->pe_signature            = pe_header->pe_signature;
@@ -463,6 +464,8 @@ static void fill_pe_header(MINIMAL_PE_HEADER *new_header,
             ((pe_format == PE_FORMAT_PE32) ? sizeof(&new_header->u2.u32)
                                            : sizeof(&new_header->u2.u64)));
 
+    final_size = (uint32_t)(uintptr_t)((uint8_t *)&section_header[2] - (uint8_t *)new_header);
+
     memset(section_header, 0, 2 * sizeof(*section_header));
 
     assert(sizeof(section_header[0].name) == sizeof(sec_bss));
@@ -477,8 +480,9 @@ static void fill_pe_header(MINIMAL_PE_HEADER *new_header,
     section_header[1].virtual_size        = make_uint32_le(aligned_end - layout->comp_data_rva);
     section_header[1].flags               = make_uint32_le(sec_flags);
     section_header[1].size_of_raw_data    = make_uint32_le(layout->end_rva - layout->comp_data_rva);
-    section_header[1].pointer_to_raw_data = make_uint32_le((uint32_t)(uintptr_t)(
-                (uint8_t *)&section_header[2] - (uint8_t *)new_header));
+    section_header[1].pointer_to_raw_data = make_uint32_le(final_size);
+
+    return final_size;
 }
 
 static void append_str(char *buf, size_t size, const char *str)
