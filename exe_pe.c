@@ -118,8 +118,8 @@ static uint16_le make_uint16_le(uint16_t value)
 {
     uint16_le data;
 
-    data.bytes[0] = value & 0xFFU;
-    data.bytes[1] = (value >> 8) & 0xFFU;
+    data.bytes[0] = (uint8_t)(value & 0xFFU);
+    data.bytes[1] = (uint8_t)((value >> 8) & 0xFFU);
 
     return data;
 }
@@ -128,10 +128,10 @@ static uint32_le make_uint32_le(uint32_t value)
 {
     uint32_le data;
 
-    data.bytes[0] = value & 0xFFU;
-    data.bytes[1] = (value >> 8) & 0xFFU;
-    data.bytes[2] = (value >> 16) & 0xFFU;
-    data.bytes[3] = (value >> 24) & 0xFFU;
+    data.bytes[0] = (uint8_t)(value & 0xFFU);
+    data.bytes[1] = (uint8_t)((value >> 8) & 0xFFU);
+    data.bytes[2] = (uint8_t)((value >> 16) & 0xFFU);
+    data.bytes[3] = (uint8_t)((value >> 24) & 0xFFU);
 
     return data;
 }
@@ -401,7 +401,7 @@ static void fill_pe_header(MINIMAL_PE_HEADER *new_header,
     const uint32_t       sec_flags   = SECTION_CNT_CODE | SECTION_MEM_EXECUTE |
                                        SECTION_MEM_READ | SECTION_MEM_WRITE;
 
-    memcpy(new_header->mz_signature, mz32, sizeof(mz32));
+    memcpy(&new_header->mz_signature, mz32, sizeof(mz32));
     new_header->pe_signature            = pe_header->pe_signature;
     new_header->machine                 = pe_header->machine;
     new_header->number_of_sections      = make_uint16_le(2);
