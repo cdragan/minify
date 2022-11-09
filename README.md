@@ -40,11 +40,11 @@ Here are the steps taken by the compressor to create a small executable:
    compress it and then fill it out manually during decompression.  Normally
    the dynamic linker/loader would take care of this, but we want to compress
    it.
-4. Disassemble text/code segment/section and convert it into individual streams
+4. Append code for loading DLLs and filling out the original import address table.
+5. Disassemble text/code segment/section and convert it into individual streams
    for instructions, operands, jump targets, etc.  Use absolute jump targets
    instead of relative.
-5. Append code for restoring the text/code segment/section.
-6. Append code for loading DLLs and filling out the original import address table.
+6. Append code for restoring the text/code segment/section.
 7. Use a common compression algorithm to pack the data from the above points.
    Find repeated sequences of bytes and encode them as (distance-length) pairs.
    This is called [LZ77 encoding](https://en.wikipedia.org/wiki/LZ77_and_LZ78).

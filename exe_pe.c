@@ -13,6 +13,67 @@
 #include <stdlib.h>
 #include <string.h>
 
+/*
+ * Layout of the program/code/data in memory is represented by the LAYOUT structure
+ * as well as the following diagram:
+ *
+ * 0 ------------------> +----------------+ <- The beginning of the process's virtual address space
+ *                       :                :
+ *                       :                :
+ * image_base ---------> +----------------+ <- Virtual address at which the process is loaded;
+ *                       |                |    all other addresses are relative to this address,
+ *                       |    original    |    hence they are called rvas (Relative Virtual Addresses)
+ *                       |    process     |
+ *                       |    data        | <- Original process data is located in this block;
+ *                       |                |    in the new exe this area is reserved and this is where
+ *                       |                |    the program will be decompressed
+ *                       |                |
+ * iat_rva ------------> +----------------+ <- New/packed Import Address Table is decompressed here in
+ *                       |      iat       |    a format which is compressible, so it occupies less space
+ *                       |                |
+ * import_loader_rva --> +----------------+ <- Loader for the IAT is decompressed here, this loader will
+ *                       |    import      |    load the imported functions from DLLs and put them
+ *                       |    loader      |    in the original IAT in original process data
+ *                       |                |
+ *                       +----------------+
+ *                       |     TODO       |
+ * lz77_data_rva ------> +----------------+ <- LZ77-compressed data is decoded here by the
+ *                       |   LZ77 data    |    arithmetic decoder
+ *                       |                |
+ * lz77_decomp_rva ----> +----------------+ <- LZ77 decompressor is decoded here by the
+ *                       |     LZ77       |    arithmetic decoder
+ *                       |  decompressor  |
+ *                       |                |
+ * comp_data_rva ------> +----------------+ <- This is where the fully compressed program is loaded
+ *                       |   compressed   |    by the OS loader from the new executable;
+ *                       |    program     |    this is also the begining of the second section
+ *                       |                |
+ * arith_decoder_rva --> +----------------+ <- Arithmetic decoder is stored here;
+ *                       |   arithmetic   |    this rva is also the new entry_point_rva
+ *                       |    decoder     |
+ * import_dir_rva -----> +----------------+
+ *                       |  mini import   |
+ *                       |   directory    |
+ * mini_iat_rva -------> +----------------+ <- Import Address Table loaded by the OS, which is used
+ *                       |   mini iat     |    by the import loader
+ * end_rva ------------> +----------------+
+ */
+
+typedef struct {
+    uint64_t image_base;
+    uint32_t iat_rva;
+    uint32_t import_loader_rva;
+    uint32_t lz77_data_rva;
+    uint32_t lz77_decompressor_rva;
+    uint32_t comp_data_rva;
+    uint32_t arith_decoder_rva;
+    uint32_t import_dir_rva;
+    uint32_t mini_iat_rva;
+    uint32_t end_rva;
+} LAYOUT;
+
+/* Auxiliary endianness-agnostic data types */
+
 typedef struct {
     uint8_t bytes[2];
 } uint16_le;
@@ -50,22 +111,52 @@ uint64_t get_uint64_le(uint64_le data)
            ((uint64_t)data.bytes[7] << 56);
 }
 
+static uint16_le make_uint16_le(uint16_t value)
+{
+    const uint16_le data = {
+        value & 0xFFU,
+        (value >> 8) & 0xFFU
+    };
+
+    return data;
+}
+
+static uint32_le make_uint32_le(uint32_t value)
+{
+    const uint32_le data = {
+        value & 0xFFU,
+        (value >> 8) & 0xFFU,
+        (value >> 16) & 0xFFU,
+        (value >> 24) & 0xFFU
+    };
+
+    return data;
+}
+
+static uint32_t align_up(uint32_t value, uint32_t align)
+{
+    return ((value - 1) / align + 1) * align;
+}
+
+/* Structures representing various data structures in PE files */
 /* Reference: https://learn.microsoft.com/en-us/windows/win32/debug/pe-format */
 
+/* The MZ (DOS) header is located at offset 0 in a PE file */
 typedef struct {
     uint16_le mz_signature;
     uint8_t   garbage[0x3A];
     uint32_le pe_offset;
 } DOS_HEADER;
 
+/* The PE header is located at offset `pe_offset` from the MZ header */
 typedef struct {
     uint32_le pe_signature;
     uint16_le machine;
-    uint16_le number_of_sections;
+    uint16_le number_of_sections; /* Sections follow the optional header */
     uint32_le time_date_stamp;
     uint32_le symbol_table_offset;
     uint32_le number_of_symbols;
-    uint16_le optional_hdr_size;
+    uint16_le optional_hdr_size; /* "Optional" header is the PE32_HEADER */
     uint16_le flags;
 } PE_HEADER;
 
@@ -85,6 +176,9 @@ typedef struct {
     uint32_le size;
 } DATA_DIRECTORY;
 
+/* The optional header, which immediately follows the PE header.
+ * The actual size of this header is specified in the PE header.
+ */
 typedef struct {
     uint16_le pe_format;
     uint8_t   linker_ver_major;
@@ -92,9 +186,9 @@ typedef struct {
     uint32_le size_of_code;
     uint32_le size_of_data;
     uint32_le size_of_uninitialized_data;
-    uint32_le address_of_entry_point;
+    uint32_le entry_point;
     uint32_le base_of_code;
-    union {
+    union { /* Different layout between 32-bit and 64-bit executable */
         struct {
             uint32_le base_of_data;
             uint32_le image_base;
@@ -117,7 +211,7 @@ typedef struct {
     uint32_le checksum;
     uint16_le subsystem;
     uint16_le dll_flags;
-    union {
+    union { /* Different layout between 32-bit and 64-bit executable */
         struct {
             uint32_le size_of_stack_reserve;
             uint32_le size_of_stack_commit;
@@ -125,8 +219,8 @@ typedef struct {
             uint32_le size_of_heap_commit;
             uint32_le reserved_loader_flags;
             uint32_le number_of_rva_and_sizes;
-            DATA_DIRECTORY rva_and_sizes[1];
-        } u32;
+            DATA_DIRECTORY rva_and_sizes[1]; /* There is one or more data directories */
+        } u32;                               /* at the end of the optional header */
         struct {
             uint64_le size_of_stack_reserve;
             uint64_le size_of_stack_commit;
@@ -138,6 +232,9 @@ typedef struct {
         } u64;
     } u2;
 } PE32_HEADER;
+
+#define PE32_HEADER_SIZE_32_BIT 104
+#define PE32_HEADER_SIZE_64_BIT 120
 
 #define PE_FORMAT_PE32      0x010B
 #define PE_FORMAT_PE32_PLUS 0x020B
@@ -162,6 +259,19 @@ typedef struct {
 #define DIR_CLR_RUNTIME_HEADER      14
 #define DIR_RESERVED                15
 
+/* An import directory RVA is specified by DIR_IMPORT_TABLE data directory */
+typedef struct {
+    uint32_le import_lookup_table_rva;
+    uint32_le time_stamp;
+    uint32_le forwarder_chain;
+    uint32_le name_rva;
+    uint32_le import_address_table_rva;
+} IMPORT_DIR_ENTRY;
+
+/* Section headers immediately follow the optional header (after the
+ * data directory entries).  The number of section headers is specified
+ * by the `number_of_sections` member in the PE header.
+ */
 typedef struct {
     char      name[8];
     uint32_le virtual_size;
@@ -174,14 +284,6 @@ typedef struct {
     uint16_le number_of_line_numbers;
     uint32_le flags;
 } SECTION_HEADER;
-
-typedef struct {
-    uint32_le import_lookup_table_rva;
-    uint32_le time_stamp;
-    uint32_le forwarder_chain;
-    uint32_le name_rva;
-    uint32_le import_address_table_rva;
-} IMPORT_DIR_ENTRY;
 
 #define SECTION_TYPE_NO_PAD            0x00000008U
 #define SECTION_CNT_CODE               0x00000020U
@@ -214,6 +316,168 @@ typedef struct {
 #define SECTION_MEM_READ               0x40000000U
 #define SECTION_MEM_WRITE              0x80000000U
 
+/* The new/minimal PE header is a merged MZ, PE and optional header.
+ * This is the header we will produce in the compressed executable.
+ */
+typedef struct {
+    uint32_le mz_signature;
+    uint32_le pe_signature; /* Exploit the unused portion of the MZ (DOS) header */
+    uint16_le machine;
+    uint16_le number_of_sections;
+    uint32_le time_date_stamp;
+    uint32_le symbol_table_offset;
+    uint32_le number_of_symbols;
+    uint16_le optional_hdr_size;
+    uint16_le flags;
+    uint16_le pe_format;
+    uint8_t   linker_ver_major;
+    uint8_t   linker_ver_minor;
+    uint32_le size_of_code;
+    uint32_le size_of_data;
+    uint32_le size_of_uninitialized_data;
+    uint32_le entry_point;
+    uint32_le base_of_code;
+    union {
+        struct {
+            uint32_le base_of_data;
+            uint32_le image_base;
+        } u32;
+        struct {
+            uint64_le image_base;
+        } u64;
+    } u1;
+    uint32_le pe_offset; /* This overlaps with section_alignment, must be the same value */
+    uint32_le file_alignment;
+    uint16_le min_os_ver_major;
+    uint16_le min_os_ver_minor;
+    uint16_le image_ver_major;
+    uint16_le image_ver_minor;
+    uint16_le subsystem_ver_major;
+    uint16_le subsystem_ver_minor;
+    uint32_le reserved_win32_version;
+    uint32_le size_of_image;
+    uint32_le size_of_headers;
+    uint32_le checksum;
+    uint16_le subsystem;
+    uint16_le dll_flags;
+    union {
+        struct {
+            uint32_le size_of_stack_reserve;
+            uint32_le size_of_stack_commit;
+            uint32_le size_of_head_reserve;
+            uint32_le size_of_heap_commit;
+            uint32_le reserved_loader_flags;
+            uint32_le number_of_rva_and_sizes;
+            DATA_DIRECTORY rva_and_sizes[2];
+        } u32;
+        struct {
+            uint64_le size_of_stack_reserve;
+            uint64_le size_of_stack_commit;
+            uint64_le size_of_head_reserve;
+            uint64_le size_of_heap_commit;
+            uint32_le reserved_loader_flags;
+            uint32_le number_of_rva_and_sizes;
+            DATA_DIRECTORY rva_and_sizes[2];
+        } u64;
+    } u2;
+    SECTION_HEADER section_placeholder[2];
+} MINIMAL_PE_HEADER;
+
+static void fill_pe_header(MINIMAL_PE_HEADER *new_header,
+                           const LAYOUT      *layout,
+                           const PE_HEADER   *pe_header,
+                           const PE32_HEADER *opt_header)
+{
+    DATA_DIRECTORY        *data_dir;
+    SECTION_HEADER        *section_header;
+    static const uint32_le mz32        = { 0x4DU, 0x5AU, 0, 0 };
+    const uint32_t         pe_format   = get_uint16_le(opt_header->pe_format);
+    const uint32_t         aligned_end = align_up(layout->end_rva, 0x1000);
+    static const char      sec_bss[8]  = "unpack";
+    static const char      sec_text[8] = "packed";
+    const uint32_t         sec_flags   = SECTION_CNT_CODE | SECTION_MEM_EXECUTE |
+                                         SECTION_MEM_READ | SECTION_MEM_WRITE;
+
+    new_header->mz_signature            = mz32;
+    new_header->pe_signature            = pe_header->pe_signature;
+    new_header->machine                 = pe_header->machine;
+    new_header->number_of_sections      = make_uint16_le(2);
+    new_header->time_date_stamp         = pe_header->time_date_stamp;
+    new_header->symbol_table_offset     = make_uint32_le(0);
+    new_header->number_of_symbols       = make_uint32_le(0);
+    new_header->optional_hdr_size       = make_uint16_le(
+            (pe_format == PE_FORMAT_PE32) ? PE32_HEADER_SIZE_32_BIT : PE32_HEADER_SIZE_64_BIT);
+    new_header->flags                   = make_uint16_le(
+            get_uint16_le(pe_header->flags) | PE_FLAG_RELOCS_STRIPPED);
+    new_header->pe_format               = opt_header->pe_format;
+    new_header->linker_ver_major        = opt_header->linker_ver_major;
+    new_header->linker_ver_minor        = opt_header->linker_ver_minor;
+    new_header->size_of_code            = make_uint32_le(aligned_end);
+    new_header->size_of_data            = make_uint32_le(0);
+    new_header->size_of_uninitialized_data = make_uint32_le(0);
+    new_header->entry_point             = make_uint32_le(layout->arith_decoder_rva);
+    new_header->base_of_code            = make_uint32_le(0);
+
+    if (pe_format == PE_FORMAT_PE32) {
+        new_header->u1.u32.base_of_data = make_uint32_le(0);
+        new_header->u1.u32.image_base   = opt_header->u1.u32.image_base;
+    }
+    else
+        new_header->u1.u64.image_base   = opt_header->u1.u64.image_base;
+
+    new_header->pe_offset               = make_uint32_le(sizeof(new_header->mz_signature));
+    new_header->file_alignment          = opt_header->file_alignment;
+    new_header->min_os_ver_major        = opt_header->min_os_ver_major;
+    new_header->min_os_ver_minor        = opt_header->min_os_ver_minor;
+    new_header->image_ver_major         = opt_header->image_ver_major;
+    new_header->image_ver_minor         = opt_header->image_ver_minor;
+    new_header->subsystem_ver_major     = opt_header->subsystem_ver_major;
+    new_header->subsystem_ver_minor     = opt_header->subsystem_ver_minor;
+    new_header->reserved_win32_version  = opt_header->reserved_win32_version;
+    new_header->size_of_image           = opt_header->size_of_image;
+    new_header->size_of_headers         = opt_header->size_of_headers;
+    new_header->checksum                = opt_header->checksum;
+    new_header->subsystem               = opt_header->subsystem;
+    new_header->dll_flags               = opt_header->dll_flags;
+
+    if (pe_format == PE_FORMAT_PE32) {
+        memcpy(&new_header->u2.u32, &opt_header->u2.u32, sizeof(opt_header->u2.u32));
+        new_header->u2.u32.number_of_rva_and_sizes = make_uint32_le(1);
+        data_dir = new_header->u2.u32.rva_and_sizes;
+    }
+    else {
+        memcpy(&new_header->u2.u64, &opt_header->u2.u64, sizeof(opt_header->u2.u64));
+        new_header->u2.u64.number_of_rva_and_sizes = make_uint32_le(1);
+        data_dir = new_header->u2.u64.rva_and_sizes;
+    }
+
+    data_dir[DIR_EXPORT_TABLE].virtual_address = make_uint32_le(0);
+    data_dir[DIR_EXPORT_TABLE].size            = make_uint32_le(0);
+    data_dir[DIR_IMPORT_TABLE].virtual_address = make_uint32_le(layout->import_dir_rva);
+    data_dir[DIR_IMPORT_TABLE].size            = make_uint32_le(2 * sizeof(IMPORT_DIR_ENTRY));
+
+    section_header = (SECTION_HEADER *)((uint8_t *)&new_header->u2 +
+            ((pe_format == PE_FORMAT_PE32) ? sizeof(&new_header->u2.u32)
+                                           : sizeof(&new_header->u2.u64)));
+
+    memset(section_header, 0, 2 * sizeof(*section_header));
+
+    assert(sizeof(section_header[0].name) == sizeof(sec_bss));
+    memcpy(section_header[0].name, sec_bss, sizeof(sec_bss));
+    section_header[0].virtual_address = make_uint32_le(0);
+    section_header[0].virtual_size    = make_uint32_le(layout->comp_data_rva);
+    section_header[0].flags           = make_uint32_le(sec_flags);
+
+    assert(sizeof(section_header[1].name) == sizeof(sec_text));
+    memcpy(section_header[1].name, sec_text, sizeof(sec_text));
+    section_header[1].virtual_address     = make_uint32_le(layout->comp_data_rva);
+    section_header[1].virtual_size        = make_uint32_le(aligned_end - layout->comp_data_rva);
+    section_header[1].flags               = make_uint32_le(sec_flags);
+    section_header[1].size_of_raw_data    = make_uint32_le(layout->end_rva - layout->comp_data_rva);
+    section_header[1].pointer_to_raw_data = make_uint32_le((uint32_t)(uintptr_t)(
+                (uint8_t *)&section_header[2] - (uint8_t *)new_header));
+}
+
 static void append_str(char *buf, size_t size, const char *str)
 {
     const size_t buf_len  = strlen(buf);
@@ -222,11 +486,6 @@ static void append_str(char *buf, size_t size, const char *str)
 
     if (num_left >= str_len)
         memcpy(buf + buf_len, str, str_len);
-}
-
-static uint32_t align_up(uint32_t value, uint32_t align)
-{
-    return ((value - 1) / align + 1) * align;
 }
 
 static void decode_section_flags(char *buf, size_t size, uint32_t flags)
@@ -458,28 +717,30 @@ int is_pe_file(const void *buf, size_t size)
 
 int exe_pe(const void *buf, size_t size)
 {
-    const PE_HEADER        *pe_header;
-    const PE32_HEADER      *opt_header;
-    const DATA_DIRECTORY   *data_dir;
-    const SECTION_HEADER   *section_header;
-    COMPRESSED_SIZES        compressed;
-    BUFFER                  mem_image;  /* Memory allocated to create processsed output */
-    BUFFER                  process_va; /* Image of the program loaded in memory */
-    BUFFER                  output;
-    BUFFER                  iat_data  = { NULL, 0 };
-    BUFFER                  lz_data   = { NULL, 0 };
-    uint32_t                machine;
-    uint32_t                dir_size;
-    const uint32_t          pe_offset = get_pe_offset(buf, size);
-    uint32_t                sect_offset;
-    uint32_t                num_sections;
-    uint32_t                va_start  = ~0U;
-    uint32_t                va_end    = 0;
-    size_t                  alloc_size;
-    unsigned int            i;
-    int                     error     = 1;
-    uint16_t                pe_flags;
-    uint16_t                pe_format;
+    const PE_HEADER      *pe_header;
+    const PE32_HEADER    *opt_header;
+    const DATA_DIRECTORY *data_dir;
+    const SECTION_HEADER *section_header;
+    MINIMAL_PE_HEADER     new_pe_header;
+    LAYOUT                layout    = { 0 };
+    COMPRESSED_SIZES      compressed;
+    BUFFER                mem_image;  /* Memory allocated to create processsed output */
+    BUFFER                process_va; /* Image of the program loaded in memory */
+    BUFFER                output;
+    BUFFER                iat_data  = { NULL, 0 };
+    BUFFER                lz77_data = { NULL, 0 };
+    uint32_t              machine;
+    uint32_t              dir_size;
+    const uint32_t        pe_offset = get_pe_offset(buf, size);
+    uint32_t              sect_offset;
+    uint32_t              num_sections;
+    uint32_t              va_start  = ~0U;
+    uint32_t              va_end    = 0;
+    size_t                alloc_size;
+    unsigned int          i;
+    int                   error     = 1;
+    uint16_t              pe_flags;
+    uint16_t              pe_format;
 
     /* Parse PE headers */
     assert(pe_offset);
@@ -552,7 +813,7 @@ int exe_pe(const void *buf, size_t size)
     printf("        code size                0x%x\n",         get_uint32_le(opt_header->size_of_code));
     printf("        data size                0x%x\n",         get_uint32_le(opt_header->size_of_data));
     printf("        uninitialized data size  0x%x\n",         get_uint32_le(opt_header->size_of_uninitialized_data));
-    printf("        entry point              0x%x\n",         get_uint32_le(opt_header->address_of_entry_point));
+    printf("        entry point              0x%x\n",         get_uint32_le(opt_header->entry_point));
     printf("        code base                0x%x\n",         get_uint32_le(opt_header->base_of_code));
     if (pe_format == PE_FORMAT_PE32) {
         printf("        data base                0x%x\n",     get_uint32_le(opt_header->u1.u32.base_of_data));
@@ -630,31 +891,17 @@ int exe_pe(const void *buf, size_t size)
         }
     }
 
-    /* Here's the layout in memory:
-     *
-     * +--------------+-----+---------------+-----------+-------------+
-     * | process data | iat | import loader | LZ77 data | LZ77 decomp |
-     *
-     * - process data - This is the original process image layout in memory, as the executable
-     *   expects Windows to load it from file.  These are all the sections loaded from the file.
-     *   We make some modifications like zero out some areas which we don't need, which will reduce
-     *   its size after compression.  The executable expects Windows to load it at `image_base`
-     *   address specified in the optional header (PE32_HEADER or PE32_PLUS_HEADER).  We zero out
-     *   stuff like debug section, relocation table (we expect Windows to load it at a fixed
-     *   address, so no relocations are needed), and import table, which is not needed (see iat). 
-     * - iat - This is import address table which contains information used by the process
-     *   after decompression to fill out the real import address table in the original process.
-     * - import loader - The routine which loads the import tables using the preceding iat
-     *   and fills out the import tables in the process data.
-     * - LZ77 - All the preceding data compressed with LZ77.
-     * - LZ77 decomp - Decompressor for the LZ77.  It decompresses the preceding LZ77 data
-     *   into all the previous chunks.
-     */
     va_end     = align_up(va_end, 0x1000);
     alloc_size = va_end + estimate_compress_size(va_end);
     mem_image  = buf_alloc(alloc_size);
     process_va = buf_truncate(mem_image, va_end);
-    output     = buf_get_tail(mem_image, process_va.size);
+    output     = buf_get_tail(mem_image, va_end);
+
+    if (pe_format == PE_FORMAT_PE32)
+        layout.image_base = get_uint32_le(opt_header->u1.u32.image_base);
+    else
+        layout.image_base = get_uint64_le(opt_header->u1.u64.image_base);
+    layout.iat_rva = va_end;
 
     /* Load all sections into the right places */
     for (i = 0; i < num_sections; i++) {
@@ -757,6 +1004,7 @@ int exe_pe(const void *buf, size_t size)
 
                 iat_data.size = align_up((uint32_t)iat_data.size, 0x1000);
                 output        = buf_get_tail(output, iat_data.size);
+                layout.import_loader_rva = layout.iat_rva + (uint32_t)iat_data.size;
                 break;
 
             default:
@@ -765,36 +1013,31 @@ int exe_pe(const void *buf, size_t size)
         }
     }
 
+    /* TODO add stub to import DLLs */
+
     /* TODO separate .text section into streams */
 
     /* TODO add stub to restore .text section */
 
-    /* TODO add stub to import DLLs */
-
-    lz_data    = output;
-    compressed = lz_compress(lz_data.buf, lz_data.size, process_va.buf, process_va.size + iat_data.size);
+    lz77_data  = output;
+    compressed = lz_compress(lz77_data.buf, lz77_data.size, process_va.buf, process_va.size + iat_data.size);
 
     if ( ! compressed.lz)
         goto cleanup;
 
-    lz_data.size = align_up((uint32_t)compressed.lz, 0x1000);
-    output       = buf_get_tail(output, lz_data.size);
+    lz77_data.size = align_up((uint32_t)compressed.lz, 0x1000);
+    output         = buf_get_tail(output, lz77_data.size);
 
     /* TODO add stub to decompress LZ */
 
-    compressed.compressed = arith_encode(output.buf, output.size, lz_data.buf, (uint32_t)compressed.lz);
+    compressed.compressed = arith_encode(output.buf, output.size, lz77_data.buf, (uint32_t)compressed.lz);
 
     /* TODO add stub for arithmetic decode */
 
     printf("Original    %zu bytes\n", size);
     printf("Compressed  %zu bytes\n", compressed.compressed);
 
-    /* Hints on minimizing PE executables:
-     *
-     * - Put PE right after MZ, i.e. PE offset 0x04
-     * - Use 1 section only
-     * - Minimize optional header size, it may be possible to use size 4
-     */
+    fill_pe_header(&new_pe_header, &layout, pe_header, opt_header);
 
     error = 0;
 
