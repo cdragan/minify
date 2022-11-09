@@ -2,7 +2,7 @@
  * Copyright (c) 2022 Chris Dragan
  */
 
-#include "stub_load_imports.h"
+#include "pe_load_imports.h"
 
 #ifdef _WIN32
 #define main __stdcall WinMainCRTStartup

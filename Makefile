@@ -43,18 +43,18 @@ test_bit_stream_src_files += bit_emit.c
 test_bit_stream_src_files += bit_stream.c
 test_bit_stream_src_files += test_bit_stream.c
 
-stubs += stub_load_imports
-stub_load_imports_sources += stub_load_imports.c
+loaders += pe_load_imports
+pe_load_imports_sources += pe_load_imports.c
 
-stubs += stub_arith_decode
-stub_arith_decode_sources += arith_decode.c
-stub_arith_decode_sources += bit_stream.c
-stub_arith_decode_sources += stub_arith_decode.c
+loaders += pe_arith_decode
+pe_arith_decode_sources += arith_decode.c
+pe_arith_decode_sources += bit_stream.c
+pe_arith_decode_sources += pe_arith_decode.c
 
-stubs += stub_lz_decompress
-stub_lz_decompress_sources += bit_stream.c
-stub_lz_decompress_sources += lz_decompress.c
-stub_lz_decompress_sources += stub_lz_decompress.c
+loaders += pe_lz_decompress
+pe_lz_decompress_sources += bit_stream.c
+pe_lz_decompress_sources += lz_decompress.c
+pe_lz_decompress_sources += pe_lz_decompress.c
 
 ##############################################################################
 # Determine target OS
@@ -195,7 +195,7 @@ endif
 
 out_dir = $(out_dir_base)/$(out_dir_config)
 
-out_stub_dir = $(out_dir_base)/stubs
+out_loader_dir = $(out_dir_base)/loaders
 
 ##############################################################################
 # Functions for constructing target paths
@@ -272,31 +272,31 @@ $(foreach test, $(tests), $(eval $(call RUN_TEST,$(test))))
 # Stubs
 
 define STUB_RULE
-default: $$(out_stub_dir)/$1.asm
+default: $$(out_loader_dir)/$1.asm
 
-$$(out_stub_dir)/$1.asm: $$(out_stub_dir)/$1$$(exe_suffix)
+$$(out_loader_dir)/$1.asm: $$(out_loader_dir)/$1$$(exe_suffix)
 	$$(call DISASM_COMMAND,$$@,$$^)
 
-$$(out_stub_dir)/$1$$(exe_suffix): $$(addprefix $(out_stub_dir)/,$$(addsuffix .$$(o_suffix),$$(basename $$($1_sources))))
+$$(out_loader_dir)/$1$$(exe_suffix): $$(addprefix $(out_loader_dir)/,$$(addsuffix .$$(o_suffix),$$(basename $$($1_sources))))
 	$$(LINK) $$(call LINKER_OUTPUT,$$@) $$^ $$(STUB_LDFLAGS)
 ifdef STUB_STRIP
 	$$(STUB_STRIP) $$@
 endif
 
-all_stub_sources += $$($1_sources)
+all_loader_sources += $$($1_sources)
 endef
 
 define STUB_CC_RULE
-$$(out_stub_dir)/$$(basename $1).$$(o_suffix): $1 | $$(out_stub_dir)
+$$(out_loader_dir)/$$(basename $1).$$(o_suffix): $1 | $$(out_loader_dir)
 	$$(CC) $$(STUB_CFLAGS) $$(WFLAGS) -c $$(call COMPILER_OUTPUT,$$@) $$<
 endef
 
-$(out_stub_dir):
+$(out_loader_dir):
 	mkdir -p $@
 
-$(foreach stub, $(stubs), $(eval $(call STUB_RULE,$(stub))))
+$(foreach loader, $(loaders), $(eval $(call STUB_RULE,$(loader))))
 
-$(foreach src, $(sort $(all_stub_sources)), $(eval $(call STUB_CC_RULE,$(src))))
+$(foreach src, $(sort $(all_loader_sources)), $(eval $(call STUB_CC_RULE,$(src))))
 
 ##############################################################################
 # Dependency files

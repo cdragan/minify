@@ -1013,11 +1013,11 @@ int exe_pe(const void *buf, size_t size)
         }
     }
 
-    /* TODO add stub to import DLLs */
+    /* TODO add loader to import DLLs */
 
     /* TODO separate .text section into streams */
 
-    /* TODO add stub to restore .text section */
+    /* TODO add loader to restore .text section */
 
     lz77_data  = output;
     compressed = lz_compress(lz77_data.buf, lz77_data.size, process_va.buf, process_va.size + iat_data.size);
@@ -1028,11 +1028,11 @@ int exe_pe(const void *buf, size_t size)
     lz77_data.size = align_up((uint32_t)compressed.lz, 0x1000);
     output         = buf_get_tail(output, lz77_data.size);
 
-    /* TODO add stub to decompress LZ */
+    /* TODO add loader to decompress LZ */
 
     compressed.compressed = arith_encode(output.buf, output.size, lz77_data.buf, (uint32_t)compressed.lz);
 
-    /* TODO add stub for arithmetic decode */
+    /* TODO add loader for arithmetic decode */
 
     printf("Original    %zu bytes\n", size);
     printf("Compressed  %zu bytes\n", compressed.compressed);
