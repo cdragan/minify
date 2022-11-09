@@ -116,22 +116,22 @@ uint64_t get_uint64_le(uint64_le data)
 
 static uint16_le make_uint16_le(uint16_t value)
 {
-    const uint16_le data = {
-        value & 0xFFU,
-        (value >> 8) & 0xFFU
-    };
+    uint16_le data;
+
+    data.bytes[0] = value & 0xFFU;
+    data.bytes[1] = (value >> 8) & 0xFFU;
 
     return data;
 }
 
 static uint32_le make_uint32_le(uint32_t value)
 {
-    const uint32_le data = {
-        value & 0xFFU,
-        (value >> 8) & 0xFFU,
-        (value >> 16) & 0xFFU,
-        (value >> 24) & 0xFFU
-    };
+    uint32_le data;
+
+    data.bytes[0] = value & 0xFFU;
+    data.bytes[1] = (value >> 8) & 0xFFU;
+    data.bytes[2] = (value >> 16) & 0xFFU;
+    data.bytes[3] = (value >> 24) & 0xFFU;
 
     return data;
 }
@@ -391,17 +391,17 @@ static void fill_pe_header(MINIMAL_PE_HEADER *new_header,
                            const PE_HEADER   *pe_header,
                            const PE32_HEADER *opt_header)
 {
-    DATA_DIRECTORY        *data_dir;
-    SECTION_HEADER        *section_header;
-    static const uint32_le mz32        = { 0x4DU, 0x5AU, 0, 0 };
-    const uint32_t         pe_format   = get_uint16_le(opt_header->pe_format);
-    const uint32_t         aligned_end = align_up(layout->end_rva, 0x1000);
-    static const char      sec_bss[8]  = "unpack";
-    static const char      sec_text[8] = "packed";
-    const uint32_t         sec_flags   = SECTION_CNT_CODE | SECTION_MEM_EXECUTE |
-                                         SECTION_MEM_READ | SECTION_MEM_WRITE;
+    DATA_DIRECTORY      *data_dir;
+    SECTION_HEADER      *section_header;
+    static const uint8_t mz32[4]     = { 0x4DU, 0x5AU, 0, 0 };
+    const uint32_t       pe_format   = get_uint16_le(opt_header->pe_format);
+    const uint32_t       aligned_end = align_up(layout->end_rva, 0x1000);
+    static const char    sec_bss[8]  = "unpack";
+    static const char    sec_text[8] = "packed";
+    const uint32_t       sec_flags   = SECTION_CNT_CODE | SECTION_MEM_EXECUTE |
+                                       SECTION_MEM_READ | SECTION_MEM_WRITE;
 
-    new_header->mz_signature            = mz32;
+    memcpy(new_header->mz_signature, mz32, sizeof(mz32));
     new_header->pe_signature            = pe_header->pe_signature;
     new_header->machine                 = pe_header->machine;
     new_header->number_of_sections      = make_uint16_le(2);
