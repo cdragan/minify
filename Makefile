@@ -80,7 +80,7 @@ ifeq ($(UNAME), Windows)
     WFLAGS += -W3
 
     ifeq ($(debug), 0)
-        CFLAGS  += -O2 -Oi -DNDEBUG -GL -MT
+        CFLAGS  += -O2 -Oi -DNDEBUG -MT -GL
         LDFLAGS += -ltcg
     else
         CFLAGS  += -D_DEBUG -Zi -MTd
@@ -98,10 +98,10 @@ ifeq ($(UNAME), Windows)
     CC   = cl.exe
     LINK = link.exe
 
-    COMPILER_OUTPUT = -Fo:$1
+    COMPILER_OUTPUT = -Fo$1
     LINKER_OUTPUT   = -out:$1
 
-    STUB_CFLAGS += -O1 -Oi -DNDEBUG -GL- -MT
+    STUB_CFLAGS += -O1 -Oi -DNDEBUG -MT -GL-
     STUB_CFLAGS += -DNOSTDLIB -D_NO_CRT_STDIO_INLINE -Zc:threadSafeInit- -GS- -Gs9999999
     STUB_CFLAGS += -nologo
     STUB_CFLAGS += -GR- -TP -EHa- -FS
