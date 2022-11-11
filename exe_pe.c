@@ -4,7 +4,7 @@
 
 #include "exe_pe.h"
 #include "arith_encode.h"
-#include "buffer.h"
+#include "load_file.h"
 #include "lza_compress.h"
 
 #include <assert.h>
@@ -722,6 +722,85 @@ int is_pe_file(const void *buf, size_t size)
     return get_pe_offset(buf, size) > 0;
 }
 
+static int add_loader(BUFFER *output, const char *loader_name)
+{
+    BUFFER                file_buf;
+    static char           filename[64];
+    const PE_HEADER      *pe_header;
+    const SECTION_HEADER *section_header;
+    uint32_t              pe_offset;
+    uint32_t              sect_offset;
+    uint32_t              num_sections;
+    uint32_t              text_pos;
+    uint32_t              text_virt_size;
+    uint32_t              text_file_size;
+    uint32_t              text_size;
+    uint32_t              i;
+    int                   err = 1;
+
+    /* TODO add 32-bit loaders */
+    snprintf(filename, sizeof(filename), "loaders/windows/x64/%s.exe", loader_name);
+
+    file_buf = load_file(filename);
+    if ( ! file_buf.buf)
+        return 1;
+
+    pe_offset = get_pe_offset(file_buf.buf, file_buf.size);
+
+    if (pe_offset == 0) {
+        fprintf(stderr, "Error: %s is not a PE file\n", filename);
+        goto cleanup;
+    }
+
+    if (file_buf.size < pe_offset + (uint32_t)sizeof(PE_HEADER)) {
+        fprintf(stderr, "Error: Corrupted %s\n", filename);
+        goto cleanup;
+    }
+
+    pe_header    = (const PE_HEADER *)at_offset(file_buf.buf, pe_offset);
+    sect_offset  = pe_offset + (uint32_t)sizeof(PE_HEADER) + get_uint16_le(pe_header->optional_hdr_size);
+    num_sections = get_uint16_le(pe_header->number_of_sections);
+
+    if (file_buf.size < sect_offset + num_sections * (uint32_t)sizeof(SECTION_HEADER)) {
+        fprintf(stderr, "Error: Corrupted %s\n", filename);
+        goto cleanup;
+    }
+
+    section_header = (const SECTION_HEADER *)at_offset(file_buf.buf, sect_offset);
+
+    for (i = 0; i < num_sections; i++) {
+        if ( ! strncmp(section_header[i].name, ".text", sizeof(section_header[i].name)))
+            break;
+    }
+
+    if (i == num_sections) {
+        fprintf(stderr, "Error: Failed to find .text section in %s\n", filename);
+        goto cleanup;
+    }
+
+    text_pos       = get_uint32_le(section_header[i].pointer_to_raw_data);
+    text_file_size = get_uint32_le(section_header[i].size_of_raw_data);
+    text_virt_size = get_uint32_le(section_header[i].virtual_size);
+    text_size      = text_file_size < text_virt_size ? text_file_size : text_virt_size;
+
+    if (text_size > output->size) {
+        fprintf(stderr, "Error: Not enough buffer space %zu for %s loader .text section of size %u\n",
+                output->size, filename, text_size);
+        goto cleanup;
+    }
+
+    memcpy(output->buf, buf_at_offset(file_buf, text_pos, text_file_size), text_size);
+
+    output->size = text_size;
+
+    err = 0;
+
+cleanup:
+    free(file_buf.buf);
+
+    return err;
+}
+
 int exe_pe(const void *buf, size_t size)
 {
     const PE_HEADER      *pe_header;
@@ -729,23 +808,28 @@ int exe_pe(const void *buf, size_t size)
     const DATA_DIRECTORY *data_dir;
     const SECTION_HEADER *section_header;
     MINIMAL_PE_HEADER     new_pe_header;
-    LAYOUT                layout    = { 0 };
+    LAYOUT                layout         = { 0 };
     COMPRESSED_SIZES      compressed;
     BUFFER                mem_image;  /* Memory allocated to create processsed output */
     BUFFER                process_va; /* Image of the program loaded in memory */
     BUFFER                output;
-    BUFFER                iat_data  = { NULL, 0 };
-    BUFFER                lz77_data = { NULL, 0 };
+    BUFFER                iat_data       = { NULL, 0 };
+    BUFFER                import_loader  = { NULL, 0 };
+    BUFFER                lz77_data      = { NULL, 0 };
+    BUFFER                lz77_decomp    = { NULL, 0 };
+    BUFFER                comp_data      = { NULL, 0 };
+    BUFFER                arith_decoder  = { NULL, 0 };
     uint32_t              machine;
     uint32_t              dir_size;
-    const uint32_t        pe_offset = get_pe_offset(buf, size);
+    const uint32_t        pe_offset      = get_pe_offset(buf, size);
     uint32_t              sect_offset;
     uint32_t              num_sections;
-    uint32_t              va_start  = ~0U;
-    uint32_t              va_end    = 0;
+    uint32_t              va_start       = ~0U;
+    uint32_t              va_end         = 0;
+    uint32_t              lz77_data_size = 0;
     size_t                alloc_size;
     unsigned int          i;
-    int                   error     = 1;
+    int                   error          = 1;
     uint16_t              pe_flags;
     uint16_t              pe_format;
 
@@ -1020,12 +1104,19 @@ int exe_pe(const void *buf, size_t size)
         }
     }
 
-    /* TODO add loader to import DLLs */
+    /* Add import loader */
+    import_loader = output;
+    if (add_loader(&import_loader, "pe_load_imports"))
+        goto cleanup;
+
+    import_loader.size   = align_up((uint32_t)import_loader.size, 0x1000);
+    output               = buf_get_tail(output, import_loader.size);
+    layout.lz77_data_rva = layout.import_loader_rva + (uint32_t)import_loader.size;
 
     /* TODO separate .text section into streams */
-
     /* TODO add loader to restore .text section */
 
+    /* Compress the program's address space with LZ77 */
     lz77_data  = output;
     compressed = lz_compress(lz77_data.buf, lz77_data.size, process_va.buf, process_va.size + iat_data.size);
 
@@ -1034,17 +1125,56 @@ int exe_pe(const void *buf, size_t size)
 
     lz77_data.size = align_up((uint32_t)compressed.lz, 0x1000);
     output         = buf_get_tail(output, lz77_data.size);
+    layout.lz77_decompressor_rva = layout.lz77_data_rva + (uint32_t)lz77_data.size;
 
-    /* TODO add loader to decompress LZ */
+    /* Add LZ77 decompressor */
+    lz77_decomp = output;
+    if (add_loader(&lz77_decomp, "pe_lz_decompress"))
+        goto cleanup;
 
-    compressed.compressed = arith_encode(output.buf, output.size, lz77_data.buf, (uint32_t)compressed.lz);
+    lz77_data_size       = (uint32_t)lz77_decomp.size;
+    lz77_decomp.size     = align_up(lz77_data_size, 0x1000);
+    output               = buf_get_tail(output, lz77_decomp.size);
+    lz77_data_size      += (uint32_t)lz77_data.size;
+    layout.comp_data_rva = layout.lz77_decompressor_rva + (uint32_t)lz77_decomp.size;
 
-    /* TODO add loader for arithmetic decode */
+    /* Encode the LZ77-compressed data with arithmetic coder */
+    comp_data                = output;
+    compressed.compressed    = arith_encode(comp_data.buf,
+                                            comp_data.size,
+                                            lz77_data.buf,
+                                            lz77_data_size);
+    comp_data.size           = (uint32_t)compressed.compressed;
+    output                   = buf_get_tail(output, comp_data.size);
+    layout.arith_decoder_rva = layout.comp_data_rva + (uint32_t)compressed.compressed;
+
+    /* Add arithmetic decoder */
+    arith_decoder = output;
+    if (add_loader(&arith_decoder, "pe_arith_decode"))
+        goto cleanup;
+
+    output                = buf_get_tail(output, arith_decoder.size);
+    layout.import_dir_rva = layout.arith_decoder_rva + (uint32_t)arith_decoder.size;
+
+    /* TODO add import_dir, mini_iat and live_layout */
 
     printf("Original    %zu bytes\n", size);
-    printf("Compressed  %zu bytes\n", compressed.compressed);
+    printf("Compressed  %zu bytes\n", comp_data.size + arith_decoder.size);
 
     fill_pe_header(&new_pe_header, &layout, pe_header, opt_header);
+
+    printf("Process virtual address space layout:\n");
+    printf("        image base               0x%llx\n", layout.image_base);
+    printf("        iat rva                  0x%x\n",   layout.iat_rva);
+    printf("        import loader rva        0x%x\n",   layout.import_loader_rva);
+    printf("        lz77 data rva            0x%x\n",   layout.lz77_data_rva);
+    printf("        lz77 decompressor rva    0x%x\n",   layout.lz77_decompressor_rva);
+    printf("        comp data rva            0x%x\n",   layout.comp_data_rva);
+    printf("        arith decoder rva        0x%x\n",   layout.arith_decoder_rva);
+    printf("        import dir rva           0x%x\n",   layout.import_dir_rva);
+    printf("        mini iat rva             0x%x\n",   layout.mini_iat_rva);
+    printf("        live layout rva          0x%x\n",   layout.live_layout_rva);
+    printf("        end rva                  0x%x\n",   layout.end_rva);
 
     error = 0;
 

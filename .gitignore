@@ -3,3 +3,6 @@ Out
 
 # Vim swap files
 .*.swp
+
+# Temporary dir for local experiments
+tmp
