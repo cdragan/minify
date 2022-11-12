@@ -722,7 +722,7 @@ int is_pe_file(const void *buf, size_t size)
     return get_pe_offset(buf, size) > 0;
 }
 
-static int add_loader(BUFFER *output, const char *loader_name)
+static int add_loader(BUFFER *output, const char *loader_name, uint32_t machine)
 {
     BUFFER                file_buf;
     static char           filename[64];
@@ -738,8 +738,10 @@ static int add_loader(BUFFER *output, const char *loader_name)
     uint32_t              i;
     int                   err = 1;
 
-    /* TODO add 32-bit loaders */
-    snprintf(filename, sizeof(filename), "loaders/windows/x64/%s.exe", loader_name);
+    assert(machine == PE_MACHINE_X86_32 || machine == PE_MACHINE_X86_64);
+    snprintf(filename, sizeof(filename), "loaders/windows/%s/%s.exe",
+             (machine == PE_MACHINE_X86_32) ? "x86" : "x64",
+             loader_name);
 
     file_buf = load_file(filename);
     if ( ! file_buf.buf)
@@ -753,7 +755,7 @@ static int add_loader(BUFFER *output, const char *loader_name)
     }
 
     if (file_buf.size < pe_offset + (uint32_t)sizeof(PE_HEADER)) {
-        fprintf(stderr, "Error: Corrupted %s\n", filename);
+        fprintf(stderr, "Error: Corrupted %s, PE header is outside of the file\n", filename);
         goto cleanup;
     }
 
@@ -762,7 +764,7 @@ static int add_loader(BUFFER *output, const char *loader_name)
     num_sections = get_uint16_le(pe_header->number_of_sections);
 
     if (file_buf.size < sect_offset + num_sections * (uint32_t)sizeof(SECTION_HEADER)) {
-        fprintf(stderr, "Error: Corrupted %s\n", filename);
+        fprintf(stderr, "Error: Corrupted %s, section headers are outside of the file\n", filename);
         goto cleanup;
     }
 
@@ -782,6 +784,11 @@ static int add_loader(BUFFER *output, const char *loader_name)
     text_file_size = get_uint32_le(section_header[i].size_of_raw_data);
     text_virt_size = get_uint32_le(section_header[i].virtual_size);
     text_size      = text_file_size < text_virt_size ? text_file_size : text_virt_size;
+
+    if (file_buf.size < text_pos + text_file_size) {
+        fprintf(stderr, "Error: Corrupted %s, .text section is outside of the file\n", filename);
+        goto cleanup;
+    }
 
     if (text_size > output->size) {
         fprintf(stderr, "Error: Not enough buffer space %zu for %s loader .text section of size %u\n",
@@ -1106,7 +1113,7 @@ int exe_pe(const void *buf, size_t size)
 
     /* Add import loader */
     import_loader = output;
-    if (add_loader(&import_loader, "pe_load_imports"))
+    if (add_loader(&import_loader, "pe_load_imports", machine))
         goto cleanup;
 
     output = buf_get_tail(output, import_loader.size);
@@ -1130,7 +1137,7 @@ int exe_pe(const void *buf, size_t size)
 
     /* Add LZ77 decompressor */
     lz77_decomp = output;
-    if (add_loader(&lz77_decomp, "pe_lz_decompress"))
+    if (add_loader(&lz77_decomp, "pe_lz_decompress", machine))
         goto cleanup;
 
     lz77_data_size       = (uint32_t)lz77_decomp.size;
@@ -1156,7 +1163,7 @@ int exe_pe(const void *buf, size_t size)
 
     /* Add arithmetic decoder */
     arith_decoder = output;
-    if (add_loader(&arith_decoder, "pe_arith_decode"))
+    if (add_loader(&arith_decoder, "pe_arith_decode", machine))
         goto cleanup;
 
     output                = buf_get_tail(output, arith_decoder.size);
