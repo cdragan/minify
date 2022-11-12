@@ -2,6 +2,8 @@
  * Copyright (c) 2022 Chris Dragan
  */
 
+#pragma once
+
 #include <stddef.h>
 #include <stdint.h>
 

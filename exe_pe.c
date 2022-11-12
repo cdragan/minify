@@ -136,6 +136,22 @@ static uint32_le make_uint32_le(uint32_t value)
     return data;
 }
 
+static uint64_le make_uint64_le(uint64_t value)
+{
+    uint64_le data;
+
+    data.bytes[0] = (uint8_t)(value & 0xFFU);
+    data.bytes[1] = (uint8_t)((value >> 8) & 0xFFU);
+    data.bytes[2] = (uint8_t)((value >> 16) & 0xFFU);
+    data.bytes[3] = (uint8_t)((value >> 24) & 0xFFU);
+    data.bytes[4] = (uint8_t)((value >> 32) & 0xFFU);
+    data.bytes[5] = (uint8_t)((value >> 40) & 0xFFU);
+    data.bytes[6] = (uint8_t)((value >> 48) & 0xFFU);
+    data.bytes[7] = (uint8_t)((value >> 56) & 0xFFU);
+
+    return data;
+}
+
 static uint32_t align_up(uint32_t value, uint32_t align)
 {
     return ((value - 1) / align + 1) * align;
@@ -235,9 +251,6 @@ typedef struct {
         } u64;
     } u2;
 } PE32_HEADER;
-
-#define PE32_HEADER_SIZE_32_BIT 104
-#define PE32_HEADER_SIZE_64_BIT 120
 
 #define PE_FORMAT_PE32      0x010B
 #define PE_FORMAT_PE32_PLUS 0x020B
@@ -402,6 +415,12 @@ static uint32_t fill_pe_header(MINIMAL_PE_HEADER *new_header,
                                        SECTION_MEM_READ | SECTION_MEM_WRITE;
     uint32_t             final_size;
 
+    section_header = (SECTION_HEADER *)((uint8_t *)&new_header->u2 +
+            ((pe_format == PE_FORMAT_PE32) ? sizeof(new_header->u2.u32)
+                                           : sizeof(new_header->u2.u64)));
+
+    final_size = (uint32_t)(uintptr_t)((uint8_t *)&section_header[2] - (uint8_t *)new_header);
+
     memcpy(&new_header->mz_signature, mz32, sizeof(mz32));
     new_header->pe_signature            = pe_header->pe_signature;
     new_header->machine                 = pe_header->machine;
@@ -410,7 +429,7 @@ static uint32_t fill_pe_header(MINIMAL_PE_HEADER *new_header,
     new_header->symbol_table_offset     = make_uint32_le(0);
     new_header->number_of_symbols       = make_uint32_le(0);
     new_header->optional_hdr_size       = make_uint16_le(
-            (pe_format == PE_FORMAT_PE32) ? PE32_HEADER_SIZE_32_BIT : PE32_HEADER_SIZE_64_BIT);
+            (uint16_t)(uintptr_t)((uint8_t *)section_header - (uint8_t *)&new_header->pe_format));
     new_header->flags                   = make_uint16_le(
             get_uint16_le(pe_header->flags) | PE_FLAG_RELOCS_STRIPPED);
     new_header->pe_format               = opt_header->pe_format;
@@ -438,20 +457,20 @@ static uint32_t fill_pe_header(MINIMAL_PE_HEADER *new_header,
     new_header->subsystem_ver_major     = opt_header->subsystem_ver_major;
     new_header->subsystem_ver_minor     = opt_header->subsystem_ver_minor;
     new_header->reserved_win32_version  = opt_header->reserved_win32_version;
-    new_header->size_of_image           = opt_header->size_of_image;
-    new_header->size_of_headers         = opt_header->size_of_headers;
+    new_header->size_of_image           = make_uint32_le(aligned_end);
+    new_header->size_of_headers         = make_uint32_le(align_up(final_size, get_uint32_le(new_header->file_alignment)));
     new_header->checksum                = opt_header->checksum;
     new_header->subsystem               = opt_header->subsystem;
     new_header->dll_flags               = opt_header->dll_flags;
 
     if (pe_format == PE_FORMAT_PE32) {
         memcpy(&new_header->u2.u32, &opt_header->u2.u32, sizeof(opt_header->u2.u32));
-        new_header->u2.u32.number_of_rva_and_sizes = make_uint32_le(1);
+        new_header->u2.u32.number_of_rva_and_sizes = make_uint32_le(2);
         data_dir = new_header->u2.u32.rva_and_sizes;
     }
     else {
         memcpy(&new_header->u2.u64, &opt_header->u2.u64, sizeof(opt_header->u2.u64));
-        new_header->u2.u64.number_of_rva_and_sizes = make_uint32_le(1);
+        new_header->u2.u64.number_of_rva_and_sizes = make_uint32_le(2);
         data_dir = new_header->u2.u64.rva_and_sizes;
     }
 
@@ -459,12 +478,6 @@ static uint32_t fill_pe_header(MINIMAL_PE_HEADER *new_header,
     data_dir[DIR_EXPORT_TABLE].size            = make_uint32_le(0);
     data_dir[DIR_IMPORT_TABLE].virtual_address = make_uint32_le(layout->import_dir_rva);
     data_dir[DIR_IMPORT_TABLE].size            = make_uint32_le(2 * sizeof(IMPORT_DIR_ENTRY));
-
-    section_header = (SECTION_HEADER *)((uint8_t *)&new_header->u2 +
-            ((pe_format == PE_FORMAT_PE32) ? sizeof(&new_header->u2.u32)
-                                           : sizeof(&new_header->u2.u64)));
-
-    final_size = (uint32_t)(uintptr_t)((uint8_t *)&section_header[2] - (uint8_t *)new_header);
 
     memset(section_header, 0, 2 * sizeof(*section_header));
 
@@ -808,7 +821,133 @@ cleanup:
     return err;
 }
 
-int exe_pe(const void *buf, size_t size)
+static uint32_t add_mini_import_dir(BUFFER *output, uint32_t import_dir_rva, uint16_t pe_format)
+{
+    static const char str_kernel32_dll[]     = "KERNEL32.dll";
+    static const char str_load_library_a[]   = "LoadLibraryA";
+    static const char str_get_proc_address[] = "GetProcAddress";
+
+    IMPORT_DIR_ENTRY *import_dir    = (IMPORT_DIR_ENTRY *)output->buf;
+    uint32_le        *iat;
+    const uint32_t    iat_offs      = 2 * (uint32_t)sizeof(IMPORT_DIR_ENTRY);
+    const uint32_t    iat_size      = 3 * (pe_format == PE_FORMAT_PE32 ? 4 : 8);
+    const uint32_t    kernel_offs   = iat_offs + iat_size;
+    const uint32_t    load_lib_offs = kernel_offs + (uint32_t)sizeof(str_kernel32_dll);
+    const uint32_t    get_proc_offs = align_up(2 + load_lib_offs + (uint32_t)sizeof(str_load_library_a), 2);
+    const uint32_t    total_size    = align_up(2 + get_proc_offs + (uint32_t)sizeof(str_get_proc_address), 2);
+
+    if (get_proc_offs + sizeof(str_get_proc_address) > output->size) {
+        fprintf(stderr, "Error: Not enough buffer space for import address table\n");
+        return 0;
+    }
+
+    /* Fill import directory entry */
+    memset(import_dir, 0, total_size);
+
+    import_dir->name_rva = make_uint32_le(import_dir_rva + kernel_offs);
+    import_dir->import_address_table_rva = make_uint32_le(import_dir_rva + iat_offs);
+
+    /* Fill import address table */
+    iat = (uint32_le *)buf_at_offset(*output, iat_offs, iat_size);
+
+    memset(iat, 0, iat_size);
+
+    if (pe_format == PE_FORMAT_PE32) {
+        iat[0] = make_uint32_le(import_dir_rva + load_lib_offs);
+        iat[1] = make_uint32_le(import_dir_rva + get_proc_offs);
+    }
+    else {
+        iat[0] = make_uint32_le(import_dir_rva + load_lib_offs);
+        iat[2] = make_uint32_le(import_dir_rva + get_proc_offs);
+    }
+
+    /* Copy strings */
+    memcpy(buf_at_offset(*output, kernel_offs,       sizeof(str_kernel32_dll)),     str_kernel32_dll,     sizeof(str_kernel32_dll));
+    memcpy(buf_at_offset(*output, load_lib_offs + 2, sizeof(str_load_library_a)),   str_load_library_a,   sizeof(str_load_library_a));
+    memcpy(buf_at_offset(*output, get_proc_offs + 2, sizeof(str_get_proc_address)), str_get_proc_address, sizeof(str_get_proc_address));
+
+    /* Update buffer size */
+    output->size = total_size;
+
+    /* Return just the import table size */
+    return iat_offs;
+}
+
+typedef struct {
+    uint32_le image_base;
+    uint32_le entry_point;
+    uint32_le iat;
+    uint32_le import_loader;
+    uint32_le lz77_data;
+    uint32_le lz77_decomp;
+    uint32_le comp_data;
+    uint32_le mini_iat;
+    uint32_le lz77_data_size;
+    uint32_le comp_data_size;
+} FINAL_LAYOUT_32;
+
+typedef struct {
+    uint64_le image_base;
+    uint64_le entry_point;
+    uint64_le iat;
+    uint64_le import_loader;
+    uint64_le lz77_data;
+    uint64_le lz77_decomp;
+    uint64_le comp_data;
+    uint64_le mini_iat;
+    uint32_le lz77_data_size;
+    uint32_le comp_data_size;
+} FINAL_LAYOUT_64;
+
+static int add_live_layout(BUFFER   output,
+                           LAYOUT  *layout,
+                           uint32_t entry_point,
+                           uint16_t pe_format,
+                           uint32_t lz77_data_size,
+                           uint32_t comp_data_size)
+{
+    if (sizeof(FINAL_LAYOUT_64) > output.size) {
+        fprintf(stderr, "Error: Not enough buffer space to store live layout\n");
+        return 1;
+    }
+
+    if (pe_format == PE_FORMAT_PE32) {
+        FINAL_LAYOUT_32 *final_layout = (FINAL_LAYOUT_32 *)output.buf;
+
+        final_layout->image_base     = make_uint32_le((uint32_t)layout->image_base);
+        final_layout->entry_point    = make_uint32_le((uint32_t)layout->image_base + entry_point);
+        final_layout->iat            = make_uint32_le((uint32_t)layout->image_base + layout->iat_rva);
+        final_layout->import_loader  = make_uint32_le((uint32_t)layout->image_base + layout->import_loader_rva);
+        final_layout->lz77_data      = make_uint32_le((uint32_t)layout->image_base + layout->lz77_data_rva);
+        final_layout->lz77_decomp    = make_uint32_le((uint32_t)layout->image_base + layout->lz77_decompressor_rva);
+        final_layout->comp_data      = make_uint32_le((uint32_t)layout->image_base + layout->comp_data_rva);
+        final_layout->mini_iat       = make_uint32_le((uint32_t)layout->image_base + layout->mini_iat_rva);
+        final_layout->lz77_data_size = make_uint32_le(lz77_data_size);
+        final_layout->comp_data_size = make_uint32_le(comp_data_size);
+
+        layout->end_rva = layout->live_layout_rva + (uint32_t)sizeof(FINAL_LAYOUT_32);
+    }
+    else {
+        FINAL_LAYOUT_64 *final_layout = (FINAL_LAYOUT_64 *)output.buf;
+
+        final_layout->image_base     = make_uint64_le(layout->image_base);
+        final_layout->entry_point    = make_uint64_le(layout->image_base + entry_point);
+        final_layout->iat            = make_uint64_le(layout->image_base + layout->iat_rva);
+        final_layout->import_loader  = make_uint64_le(layout->image_base + layout->import_loader_rva);
+        final_layout->lz77_data      = make_uint64_le(layout->image_base + layout->lz77_data_rva);
+        final_layout->lz77_decomp    = make_uint64_le(layout->image_base + layout->lz77_decompressor_rva);
+        final_layout->comp_data      = make_uint64_le(layout->image_base + layout->comp_data_rva);
+        final_layout->mini_iat       = make_uint64_le(layout->image_base + layout->mini_iat_rva);
+        final_layout->lz77_data_size = make_uint32_le(lz77_data_size);
+        final_layout->comp_data_size = make_uint32_le(comp_data_size);
+
+        layout->end_rva = layout->live_layout_rva + (uint32_t)sizeof(FINAL_LAYOUT_64);
+    }
+
+    return 0;
+}
+
+BUFFER exe_pe(const void *buf, size_t size)
 {
     const PE_HEADER      *pe_header;
     const PE32_HEADER    *opt_header;
@@ -817,9 +956,10 @@ int exe_pe(const void *buf, size_t size)
     MINIMAL_PE_HEADER     new_pe_header;
     LAYOUT                layout         = { 0 };
     COMPRESSED_SIZES      compressed;
+    size_t                alloc_size;
     BUFFER                mem_image;  /* Memory allocated to create processsed output */
     BUFFER                process_va; /* Image of the program loaded in memory */
-    BUFFER                output;
+    BUFFER                output         = { NULL, 0 };
     BUFFER                iat_data       = { NULL, 0 };
     BUFFER                import_loader  = { NULL, 0 };
     BUFFER                lz77_data      = { NULL, 0 };
@@ -829,12 +969,13 @@ int exe_pe(const void *buf, size_t size)
     uint32_t              machine;
     uint32_t              dir_size;
     const uint32_t        pe_offset      = get_pe_offset(buf, size);
+    uint32_t              pe_hdrs_size;
     uint32_t              sect_offset;
     uint32_t              num_sections;
     uint32_t              va_start       = ~0U;
     uint32_t              va_end         = 0;
     uint32_t              lz77_data_size = 0;
-    size_t                alloc_size;
+    uint32_t              new_hdr_size;
     unsigned int          i;
     int                   error          = 1;
     uint16_t              pe_flags;
@@ -857,16 +998,16 @@ int exe_pe(const void *buf, size_t size)
 
         case PE_MACHINE_AARCH64:
             fprintf(stderr, "PE format for aarch64 architecture is not supported\n");
-            return 1;
+            return output;
 
         default:
             fprintf(stderr, "Error: Unknown architecture 0x%x in PE format\n", machine);
-            return 1;
+            return output;
     }
 
     if (get_uint32_le(pe_header->symbol_table_offset) || get_uint32_le(pe_header->number_of_symbols)) {
         fprintf(stderr, "Error: Compressing symbol table in PE format is not supported\n");
-        return 1;
+        return output;
     }
 
     pe_flags = get_uint16_le(pe_header->flags);
@@ -874,12 +1015,12 @@ int exe_pe(const void *buf, size_t size)
     if (pe_flags & PE_FLAG_UNSUPPORTED) {
         fprintf(stderr, "Error: Unsupported bits set in characteristics field: 0x%x\n",
                 pe_flags & PE_FLAG_UNSUPPORTED);
-        return 1;
+        return output;
     }
 
     if (pe_flags & PE_FLAG_DLL) {
         fprintf(stderr, "Error: Compressing DLLs is not supported\n");
-        return 1;
+        return output;
     }
 
     sect_offset  = pe_offset + (uint32_t)sizeof(PE_HEADER) + get_uint16_le(pe_header->optional_hdr_size);
@@ -887,12 +1028,12 @@ int exe_pe(const void *buf, size_t size)
 
     if (sect_offset + num_sections * sizeof(SECTION_HEADER) > size) {
         fprintf(stderr, "Error: Optional header size or sections exceed file size\n");
-        return 1;
+        return output;
     }
 
     if (get_uint16_le(pe_header->optional_hdr_size) < sizeof(PE32_HEADER)) {
         fprintf(stderr, "Error: Invalid optional header size\n");
-        return 1;
+        return output;
     }
 
     opt_header = (const PE32_HEADER *)at_offset(buf, pe_offset + (uint32_t)sizeof(PE_HEADER));
@@ -901,7 +1042,7 @@ int exe_pe(const void *buf, size_t size)
     if (pe_format != PE_FORMAT_PE32 && pe_format != PE_FORMAT_PE32_PLUS) {
 
         fprintf(stderr, "Error: Unsupported format of PE optional header: 0x%x\n", pe_format);
-        return 1;
+        return output;
     }
 
     /* Print optional header */
@@ -970,22 +1111,22 @@ int exe_pe(const void *buf, size_t size)
         value = get_uint32_le(section_header[i].pointer_to_relocations);
         if (value) {
             fprintf(stderr, "Error: pointer_to_relocations is %u in section %u but expected 0\n", value, i);
-            return 1;
+            return output;
         }
         value = get_uint32_le(section_header[i].pointer_to_line_numbers);
         if (value) {
             fprintf(stderr, "Error: pointer_to_line_numbers is %u in section %u but expected 0\n", value, i);
-            return 1;
+            return output;
         }
         value = get_uint16_le(section_header[i].number_of_relocations);
         if (value) {
             fprintf(stderr, "Error: number_of_relocations is %u in section %u but expected 0\n", value, i);
-            return 1;
+            return output;
         }
         value = get_uint16_le(section_header[i].number_of_line_numbers);
         if (value) {
             fprintf(stderr, "Error: number_of_line_numbers is %u in section %u but expected 0\n", value, i);
-            return 1;
+            return output;
         }
     }
 
@@ -1024,11 +1165,14 @@ int exe_pe(const void *buf, size_t size)
         dir_size = get_uint32_le(opt_header->u2.u64.number_of_rva_and_sizes);
     }
 
-    if (dir_size == 0 ||
-        (dir_size - 1) * sizeof(DATA_DIRECTORY) + sizeof(PE32_HEADER) <
-            get_uint16_le(pe_header->optional_hdr_size)) {
+    pe_hdrs_size = (pe_format == PE_FORMAT_PE32) ? 96 : 112;
 
-        fprintf(stderr, "Error: Unexpected optional header size\n");
+    if (dir_size == 0 ||
+        get_uint16_le(pe_header->optional_hdr_size) != pe_hdrs_size + dir_size * sizeof(DATA_DIRECTORY)) {
+
+        fprintf(stderr, "Error: Unexpected optional header size %u (expected %zu)\n",
+                get_uint16_le(pe_header->optional_hdr_size),
+                pe_hdrs_size + dir_size * sizeof(DATA_DIRECTORY));
         goto cleanup;
     }
 
@@ -1100,6 +1244,8 @@ int exe_pe(const void *buf, size_t size)
                                          pe_format == PE_FORMAT_PE32_PLUS))
                     goto cleanup;
 
+                iat_data.size = align_up((uint32_t)iat_data.size, 16);
+
                 output = buf_get_tail(output, iat_data.size);
 
                 layout.import_loader_rva = layout.iat_rva + (uint32_t)iat_data.size;
@@ -1130,8 +1276,8 @@ int exe_pe(const void *buf, size_t size)
     if ( ! compressed.lz)
         goto cleanup;
 
-    lz77_data.size               = (uint32_t)compressed.lz;
-    layout.lz77_decompressor_rva = layout.lz77_data_rva + (uint32_t)lz77_data.size;
+    layout.lz77_decompressor_rva = align_up(layout.lz77_data_rva + (uint32_t)compressed.lz, 16);
+    lz77_data.size               = layout.lz77_decompressor_rva - layout.lz77_data_rva;
 
     output = buf_get_tail(output, lz77_data.size);
 
@@ -1157,9 +1303,9 @@ int exe_pe(const void *buf, size_t size)
     /* Encode the LZ77-compressed data with arithmetic coder */
     comp_data                = output;
     compressed.compressed    = arith_encode(comp_data.buf, comp_data.size, lz77_data.buf, lz77_data_size);
-    comp_data.size           = (uint32_t)compressed.compressed;
+    comp_data.size           = align_up((uint32_t)compressed.compressed, 16);
     output                   = buf_get_tail(output, comp_data.size);
-    layout.arith_decoder_rva = layout.comp_data_rva + (uint32_t)compressed.compressed;
+    layout.arith_decoder_rva = layout.comp_data_rva + (uint32_t)comp_data.size;
 
     /* Add arithmetic decoder */
     arith_decoder = output;
@@ -1169,12 +1315,31 @@ int exe_pe(const void *buf, size_t size)
     output                = buf_get_tail(output, arith_decoder.size);
     layout.import_dir_rva = layout.arith_decoder_rva + (uint32_t)arith_decoder.size;
 
-    /* TODO add import_dir, mini_iat and live_layout */
+    /* Add import directory */
+    {
+        BUFFER   import_dir;
+        uint32_t import_dir_size;
 
-    printf("Original    %zu bytes\n", size);
-    printf("Compressed  %zu bytes\n", comp_data.size + arith_decoder.size);
+        import_dir = output;
+        import_dir_size = add_mini_import_dir(&import_dir, layout.import_dir_rva, pe_format);
+        if ( ! import_dir_size)
+            goto cleanup;
 
-    fill_pe_header(&new_pe_header, &layout, pe_header, opt_header);
+        output = buf_get_tail(output, import_dir.size);
+        layout.live_layout_rva = layout.import_dir_rva + (uint32_t)import_dir.size;
+        layout.mini_iat_rva    = layout.import_dir_rva + import_dir_size;
+    }
+
+    /* Add layout which is used by the loaders */
+    if (add_live_layout(output,
+                        &layout,
+                        get_uint32_le(opt_header->entry_point),
+                        pe_format,
+                        lz77_data_size,
+                        (uint32_t)compressed.compressed))
+        goto cleanup;
+
+    new_hdr_size = fill_pe_header(&new_pe_header, &layout, pe_header, opt_header);
 
     printf("Process virtual address space layout:\n");
     printf("        image base               0x%llx\n",          layout.image_base);
@@ -1189,10 +1354,24 @@ int exe_pe(const void *buf, size_t size)
     printf("        live layout rva          0x%x (%u bytes)\n", layout.live_layout_rva,       layout.end_rva - layout.live_layout_rva);
     printf("        end rva                  0x%x\n",            layout.end_rva);
 
+    /* Produce final file image */
+    output = mem_image;
+    memcpy(output.buf, &new_pe_header, new_hdr_size);
+    memcpy(output.buf + new_hdr_size,
+           comp_data.buf,
+           layout.end_rva - layout.comp_data_rva);
+
+    output.size = new_hdr_size + (layout.end_rva - layout.comp_data_rva);
+
     error = 0;
 
 cleanup:
-    free(mem_image.buf);
+    if (error) {
+        free(mem_image.buf);
 
-    return error;
+        output.buf  = NULL;
+        output.size = 0;
+    }
+
+    return output;
 }

@@ -12,6 +12,41 @@
 #include <stdlib.h>
 #include <string.h>
 
+static int save_file(const char *filename, BUFFER buf)
+{
+    static char new_filename[1024];
+    FILE       *file;
+    size_t      len;
+
+    len = strlen(filename);
+
+    if (len + 4 > sizeof(new_filename)) {
+        fprintf(stderr, "Error: File name %s is too long\n", filename);
+        return EXIT_FAILURE;
+    }
+
+    snprintf(new_filename, sizeof(new_filename), "%s.new", filename);
+
+    file = fopen(new_filename, "wb");
+    if ( ! file) {
+        perror(new_filename);
+        return EXIT_FAILURE;
+    }
+
+    len = fwrite(buf.buf, 1, buf.size, file);
+    if (len != buf.size && ferror(file)) {
+        fprintf(stderr, "Error: Failed to write to file %s\n", new_filename);
+        fclose(file);
+        return EXIT_FAILURE;
+    }
+
+    fclose(file);
+
+    printf("Saved compressed executable in %s\n", new_filename);
+
+    return EXIT_SUCCESS;
+}
+
 int main(int argc, char *argv[])
 {
     COMPRESSED_SIZES compressed;
@@ -32,8 +67,22 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
 
     if (is_pe_file(buf.buf, buf.size)) {
-        if (exe_pe(buf.buf, buf.size))
-            return EXIT_FAILURE;
+        int    err    = EXIT_SUCCESS;
+        BUFFER output = exe_pe(buf.buf, buf.size);
+        if ( ! output.buf)
+            err = EXIT_FAILURE;
+        else
+            err = save_file(argv[1], output);
+
+        if ( ! err)
+            printf("Compressed %zu -> %zu (%zu %%)\n",
+                   buf.size, output.size, output.size * 100 / buf.size);
+
+        if (output.buf)
+            free(output.buf);
+        free(buf.buf);
+
+        return err;
     }
 
     compr_buffer_size   = estimate_compress_size(buf.size);

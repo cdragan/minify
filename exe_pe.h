@@ -2,7 +2,7 @@
  * Copyright (c) 2022 Chris Dragan
  */
 
-#include <stddef.h>
+#include "buffer.h"
 
-int is_pe_file(const void *buf, size_t size);
-int exe_pe(const void *buf, size_t size);
+int    is_pe_file(const void *buf, size_t size);
+BUFFER exe_pe(const void *buf, size_t size);
