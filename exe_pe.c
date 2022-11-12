@@ -8,6 +8,8 @@
 #include "lza_compress.h"
 
 #include <assert.h>
+#define __STDC_FORMAT_MACROS
+#include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1046,41 +1048,41 @@ BUFFER exe_pe(const void *buf, size_t size)
     }
 
     /* Print optional header */
-    printf("        PE flags                 0x%x\n",         pe_flags);
+    printf("        PE flags                 0x%x\n",              pe_flags);
     printf("optional header:\n");
-    printf("        linker ver               %u.%u\n",        opt_header->linker_ver_major, opt_header->linker_ver_minor);
-    printf("        code size                0x%x\n",         get_uint32_le(opt_header->size_of_code));
-    printf("        data size                0x%x\n",         get_uint32_le(opt_header->size_of_data));
-    printf("        uninitialized data size  0x%x\n",         get_uint32_le(opt_header->size_of_uninitialized_data));
-    printf("        entry point              0x%x\n",         get_uint32_le(opt_header->entry_point));
-    printf("        code base                0x%x\n",         get_uint32_le(opt_header->base_of_code));
+    printf("        linker ver               %u.%u\n",             opt_header->linker_ver_major, opt_header->linker_ver_minor);
+    printf("        code size                0x%x\n",              get_uint32_le(opt_header->size_of_code));
+    printf("        data size                0x%x\n",              get_uint32_le(opt_header->size_of_data));
+    printf("        uninitialized data size  0x%x\n",              get_uint32_le(opt_header->size_of_uninitialized_data));
+    printf("        entry point              0x%x\n",              get_uint32_le(opt_header->entry_point));
+    printf("        code base                0x%x\n",              get_uint32_le(opt_header->base_of_code));
     if (pe_format == PE_FORMAT_PE32) {
-        printf("        data base                0x%x\n",     get_uint32_le(opt_header->u1.u32.base_of_data));
-        printf("        image base               0x%x\n",     get_uint32_le(opt_header->u1.u32.image_base));
+        printf("        data base                0x%x\n",          get_uint32_le(opt_header->u1.u32.base_of_data));
+        printf("        image base               0x%x\n",          get_uint32_le(opt_header->u1.u32.image_base));
     }
     else
-        printf("        image base               0x%llx\n",   (unsigned long long)get_uint64_le(opt_header->u1.u64.image_base));
-    printf("        section alignment        %u\n",           get_uint32_le(opt_header->section_alignment));
-    printf("        file alignment           %u\n",           get_uint32_le(opt_header->file_alignment));
-    printf("        min os ver               %u.%u\n",        get_uint16_le(opt_header->min_os_ver_major), get_uint16_le(opt_header->min_os_ver_minor));
-    printf("        image ver                %u.%u\n",        get_uint16_le(opt_header->image_ver_major), get_uint16_le(opt_header->image_ver_minor));
-    printf("        subsystem ver            %u.%u\n",        get_uint16_le(opt_header->subsystem_ver_major), get_uint16_le(opt_header->subsystem_ver_minor));
-    printf("        image size               0x%x\n",         get_uint32_le(opt_header->size_of_image));
-    printf("        headers size             0x%x\n",         get_uint32_le(opt_header->size_of_headers));
-    printf("        checksum                 0x%x\n",         get_uint32_le(opt_header->checksum));
-    printf("        subsystem                %u\n",           get_uint16_le(opt_header->subsystem));
-    printf("        dll_flags                0x%x\n",         get_uint16_le(opt_header->dll_flags));
+        printf("        image base               0x%" PRIx64 "\n", get_uint64_le(opt_header->u1.u64.image_base));
+    printf("        section alignment        %u\n",                get_uint32_le(opt_header->section_alignment));
+    printf("        file alignment           %u\n",                get_uint32_le(opt_header->file_alignment));
+    printf("        min os ver               %u.%u\n",             get_uint16_le(opt_header->min_os_ver_major), get_uint16_le(opt_header->min_os_ver_minor));
+    printf("        image ver                %u.%u\n",             get_uint16_le(opt_header->image_ver_major), get_uint16_le(opt_header->image_ver_minor));
+    printf("        subsystem ver            %u.%u\n",             get_uint16_le(opt_header->subsystem_ver_major), get_uint16_le(opt_header->subsystem_ver_minor));
+    printf("        image size               0x%x\n",              get_uint32_le(opt_header->size_of_image));
+    printf("        headers size             0x%x\n",              get_uint32_le(opt_header->size_of_headers));
+    printf("        checksum                 0x%x\n",              get_uint32_le(opt_header->checksum));
+    printf("        subsystem                %u\n",                get_uint16_le(opt_header->subsystem));
+    printf("        dll_flags                0x%x\n",              get_uint16_le(opt_header->dll_flags));
     if (pe_format == PE_FORMAT_PE32) {
-        printf("        size_of_stack_reserve    0x%x\n",     get_uint32_le(opt_header->u2.u32.size_of_stack_reserve));
-        printf("        size_of_stack_commit     0x%x\n",     get_uint32_le(opt_header->u2.u32.size_of_stack_commit));
-        printf("        size_of_head_reserve     0x%x\n",     get_uint32_le(opt_header->u2.u32.size_of_head_reserve));
-        printf("        size_of_heap_commit      0x%x\n",     get_uint32_le(opt_header->u2.u32.size_of_heap_commit));
+        printf("        size_of_stack_reserve    0x%x\n",          get_uint32_le(opt_header->u2.u32.size_of_stack_reserve));
+        printf("        size_of_stack_commit     0x%x\n",          get_uint32_le(opt_header->u2.u32.size_of_stack_commit));
+        printf("        size_of_head_reserve     0x%x\n",          get_uint32_le(opt_header->u2.u32.size_of_head_reserve));
+        printf("        size_of_heap_commit      0x%x\n",          get_uint32_le(opt_header->u2.u32.size_of_heap_commit));
     }
     else {
-        printf("        size_of_stack_reserve    0x%llx\n",   (unsigned long long)get_uint64_le(opt_header->u2.u64.size_of_stack_reserve));
-        printf("        size_of_stack_commit     0x%llx\n",   (unsigned long long)get_uint64_le(opt_header->u2.u64.size_of_stack_commit));
-        printf("        size_of_head_reserve     0x%llx\n",   (unsigned long long)get_uint64_le(opt_header->u2.u64.size_of_head_reserve));
-        printf("        size_of_heap_commit      0x%llx\n",   (unsigned long long)get_uint64_le(opt_header->u2.u64.size_of_heap_commit));
+        printf("        size_of_stack_reserve    0x%" PRIx64 "\n", get_uint64_le(opt_header->u2.u64.size_of_stack_reserve));
+        printf("        size_of_stack_commit     0x%" PRIx64 "\n", get_uint64_le(opt_header->u2.u64.size_of_stack_commit));
+        printf("        size_of_head_reserve     0x%" PRIx64 "\n", get_uint64_le(opt_header->u2.u64.size_of_head_reserve));
+        printf("        size_of_heap_commit      0x%" PRIx64 "\n", get_uint64_le(opt_header->u2.u64.size_of_heap_commit));
     }
 
     /* Process and print sections */
@@ -1342,7 +1344,7 @@ BUFFER exe_pe(const void *buf, size_t size)
     new_hdr_size = fill_pe_header(&new_pe_header, &layout, pe_header, opt_header);
 
     printf("Process virtual address space layout:\n");
-    printf("        image base               0x%llx\n",          layout.image_base);
+    printf("        image base               0x%" PRIx64 "\n",   layout.image_base);
     printf("        iat rva                  0x%x (%u bytes)\n", layout.iat_rva,               layout.import_loader_rva - layout.iat_rva);
     printf("        import loader rva        0x%x (%u bytes)\n", layout.import_loader_rva,     layout.lz77_data_rva - layout.import_loader_rva);
     printf("        lz77 data rva            0x%x (%u bytes)\n", layout.lz77_data_rva,         layout.lz77_decompressor_rva - layout.lz77_data_rva);
