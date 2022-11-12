@@ -1093,8 +1093,8 @@ int exe_pe(const void *buf, size_t size)
                                          pe_format == PE_FORMAT_PE32_PLUS))
                     goto cleanup;
 
-                iat_data.size = align_up((uint32_t)iat_data.size, 0x1000);
-                output        = buf_get_tail(output, iat_data.size);
+                output = buf_get_tail(output, iat_data.size);
+
                 layout.import_loader_rva = layout.iat_rva + (uint32_t)iat_data.size;
                 break;
 
@@ -1109,8 +1109,8 @@ int exe_pe(const void *buf, size_t size)
     if (add_loader(&import_loader, "pe_load_imports"))
         goto cleanup;
 
-    import_loader.size   = align_up((uint32_t)import_loader.size, 0x1000);
-    output               = buf_get_tail(output, import_loader.size);
+    output = buf_get_tail(output, import_loader.size);
+
     layout.lz77_data_rva = layout.import_loader_rva + (uint32_t)import_loader.size;
 
     /* TODO separate .text section into streams */
@@ -1123,9 +1123,10 @@ int exe_pe(const void *buf, size_t size)
     if ( ! compressed.lz)
         goto cleanup;
 
-    lz77_data.size = align_up((uint32_t)compressed.lz, 0x1000);
-    output         = buf_get_tail(output, lz77_data.size);
+    lz77_data.size               = (uint32_t)compressed.lz;
     layout.lz77_decompressor_rva = layout.lz77_data_rva + (uint32_t)lz77_data.size;
+
+    output = buf_get_tail(output, lz77_data.size);
 
     /* Add LZ77 decompressor */
     lz77_decomp = output;
@@ -1133,17 +1134,22 @@ int exe_pe(const void *buf, size_t size)
         goto cleanup;
 
     lz77_data_size       = (uint32_t)lz77_decomp.size;
-    lz77_decomp.size     = align_up(lz77_data_size, 0x1000);
     output               = buf_get_tail(output, lz77_decomp.size);
     lz77_data_size      += (uint32_t)lz77_data.size;
     layout.comp_data_rva = layout.lz77_decompressor_rva + (uint32_t)lz77_decomp.size;
 
+    /* Next section is loaded from file, so align it on 4K */
+    {
+        const uint32_t tail = layout.comp_data_rva % 0x1000;
+        const uint32_t fill = tail ? (0x1000 - tail) : 0;
+
+        layout.comp_data_rva += fill;
+        output = buf_get_tail(output, fill);
+    }
+
     /* Encode the LZ77-compressed data with arithmetic coder */
     comp_data                = output;
-    compressed.compressed    = arith_encode(comp_data.buf,
-                                            comp_data.size,
-                                            lz77_data.buf,
-                                            lz77_data_size);
+    compressed.compressed    = arith_encode(comp_data.buf, comp_data.size, lz77_data.buf, lz77_data_size);
     comp_data.size           = (uint32_t)compressed.compressed;
     output                   = buf_get_tail(output, comp_data.size);
     layout.arith_decoder_rva = layout.comp_data_rva + (uint32_t)compressed.compressed;
@@ -1164,17 +1170,17 @@ int exe_pe(const void *buf, size_t size)
     fill_pe_header(&new_pe_header, &layout, pe_header, opt_header);
 
     printf("Process virtual address space layout:\n");
-    printf("        image base               0x%llx\n", layout.image_base);
-    printf("        iat rva                  0x%x\n",   layout.iat_rva);
-    printf("        import loader rva        0x%x\n",   layout.import_loader_rva);
-    printf("        lz77 data rva            0x%x\n",   layout.lz77_data_rva);
-    printf("        lz77 decompressor rva    0x%x\n",   layout.lz77_decompressor_rva);
-    printf("        comp data rva            0x%x\n",   layout.comp_data_rva);
-    printf("        arith decoder rva        0x%x\n",   layout.arith_decoder_rva);
-    printf("        import dir rva           0x%x\n",   layout.import_dir_rva);
-    printf("        mini iat rva             0x%x\n",   layout.mini_iat_rva);
-    printf("        live layout rva          0x%x\n",   layout.live_layout_rva);
-    printf("        end rva                  0x%x\n",   layout.end_rva);
+    printf("        image base               0x%llx\n",          layout.image_base);
+    printf("        iat rva                  0x%x (%u bytes)\n", layout.iat_rva,               layout.import_loader_rva - layout.iat_rva);
+    printf("        import loader rva        0x%x (%u bytes)\n", layout.import_loader_rva,     layout.lz77_data_rva - layout.import_loader_rva);
+    printf("        lz77 data rva            0x%x (%u bytes)\n", layout.lz77_data_rva,         layout.lz77_decompressor_rva - layout.lz77_data_rva);
+    printf("        lz77 decompressor rva    0x%x (%u bytes)\n", layout.lz77_decompressor_rva, lz77_data_size - (layout.lz77_decompressor_rva - layout.lz77_data_rva));
+    printf("        comp data rva            0x%x (%u bytes)\n", layout.comp_data_rva,         layout.arith_decoder_rva - layout.comp_data_rva);
+    printf("        arith decoder rva        0x%x (%u bytes)\n", layout.arith_decoder_rva,     layout.import_dir_rva - layout.arith_decoder_rva);
+    printf("        import dir rva           0x%x (%u bytes)\n", layout.import_dir_rva,        layout.mini_iat_rva - layout.import_dir_rva);
+    printf("        mini iat rva             0x%x (%u bytes)\n", layout.mini_iat_rva,          layout.live_layout_rva - layout.mini_iat_rva);
+    printf("        live layout rva          0x%x (%u bytes)\n", layout.live_layout_rva,       layout.end_rva - layout.live_layout_rva);
+    printf("        end rva                  0x%x\n",            layout.end_rva);
 
     error = 0;
 
