@@ -403,6 +403,7 @@ typedef struct {
 
 static uint32_t fill_pe_header(MINIMAL_PE_HEADER *new_header,
                                const LAYOUT      *layout,
+                               uint32_t           entry_point,
                                const PE_HEADER   *pe_header,
                                const PE32_HEADER *opt_header)
 {
@@ -440,7 +441,7 @@ static uint32_t fill_pe_header(MINIMAL_PE_HEADER *new_header,
     new_header->size_of_code            = make_uint32_le(aligned_end);
     new_header->size_of_data            = make_uint32_le(0);
     new_header->size_of_uninitialized_data = make_uint32_le(0);
-    new_header->entry_point             = make_uint32_le(layout->arith_decoder_rva);
+    new_header->entry_point             = make_uint32_le(entry_point);
     new_header->base_of_code            = make_uint32_le(0);
 
     if (pe_format == PE_FORMAT_PE32) {
@@ -737,11 +738,12 @@ int is_pe_file(const void *buf, size_t size)
     return get_pe_offset(buf, size) > 0;
 }
 
-static int add_loader(BUFFER *output, const char *loader_name, uint32_t machine)
+static uint32_t add_loader(BUFFER *output, const char *loader_name, uint32_t machine)
 {
     BUFFER                file_buf;
     static char           filename[64];
     const PE_HEADER      *pe_header;
+    const PE32_HEADER    *opt_header;
     const SECTION_HEADER *section_header;
     uint32_t              pe_offset;
     uint32_t              sect_offset;
@@ -750,8 +752,10 @@ static int add_loader(BUFFER *output, const char *loader_name, uint32_t machine)
     uint32_t              text_virt_size;
     uint32_t              text_file_size;
     uint32_t              text_size;
+    uint32_t              text_virt_offs;
+    uint32_t              entry_point;
     uint32_t              i;
-    int                   err = 1;
+    uint32_t              entry_point_offs = ~0U;
 
     assert(machine == PE_MACHINE_X86_32 || machine == PE_MACHINE_X86_64);
     snprintf(filename, sizeof(filename), "loaders/windows/%s/%s.exe",
@@ -760,7 +764,7 @@ static int add_loader(BUFFER *output, const char *loader_name, uint32_t machine)
 
     file_buf = load_file(filename);
     if ( ! file_buf.buf)
-        return 1;
+        return ~0U;
 
     pe_offset = get_pe_offset(file_buf.buf, file_buf.size);
 
@@ -775,6 +779,7 @@ static int add_loader(BUFFER *output, const char *loader_name, uint32_t machine)
     }
 
     pe_header    = (const PE_HEADER *)at_offset(file_buf.buf, pe_offset);
+    opt_header   = (const PE32_HEADER *)at_offset(file_buf.buf, pe_offset + sizeof(PE_HEADER));
     sect_offset  = pe_offset + (uint32_t)sizeof(PE_HEADER) + get_uint16_le(pe_header->optional_hdr_size);
     num_sections = get_uint16_le(pe_header->number_of_sections);
 
@@ -799,6 +804,8 @@ static int add_loader(BUFFER *output, const char *loader_name, uint32_t machine)
     text_file_size = get_uint32_le(section_header[i].size_of_raw_data);
     text_virt_size = get_uint32_le(section_header[i].virtual_size);
     text_size      = text_file_size < text_virt_size ? text_file_size : text_virt_size;
+    text_virt_offs = get_uint32_le(section_header[i].virtual_address);
+    entry_point    = get_uint32_le(opt_header->entry_point);
 
     if (file_buf.size < text_pos + text_file_size) {
         fprintf(stderr, "Error: Corrupted %s, .text section is outside of the file\n", filename);
@@ -811,16 +818,22 @@ static int add_loader(BUFFER *output, const char *loader_name, uint32_t machine)
         goto cleanup;
     }
 
+    if (entry_point < text_virt_offs || entry_point >= text_virt_offs + text_size) {
+        fprintf(stderr, "Error: Corrupted %s, entry point 0x%x is outside .text section\n",
+                filename, entry_point);
+        goto cleanup;
+    }
+
     memcpy(output->buf, buf_at_offset(file_buf, text_pos, text_file_size), text_size);
 
     output->size = text_size;
 
-    err = 0;
+    entry_point_offs = entry_point - text_virt_offs;
 
 cleanup:
     free(file_buf.buf);
 
-    return err;
+    return entry_point_offs;
 }
 
 static uint32_t add_mini_import_dir(BUFFER *output, uint32_t import_dir_rva, uint16_t pe_format)
@@ -905,6 +918,8 @@ static int add_live_layout(BUFFER   output,
                            LAYOUT  *layout,
                            uint32_t entry_point,
                            uint16_t pe_format,
+                           uint32_t import_loader_offs,
+                           uint32_t lz77_decomp_offs,
                            uint32_t lz77_data_size,
                            uint32_t comp_data_size)
 {
@@ -919,9 +934,9 @@ static int add_live_layout(BUFFER   output,
         final_layout->image_base     = make_uint32_le((uint32_t)layout->image_base);
         final_layout->entry_point    = make_uint32_le((uint32_t)layout->image_base + entry_point);
         final_layout->iat            = make_uint32_le((uint32_t)layout->image_base + layout->iat_rva);
-        final_layout->import_loader  = make_uint32_le((uint32_t)layout->image_base + layout->import_loader_rva);
+        final_layout->import_loader  = make_uint32_le((uint32_t)layout->image_base + layout->import_loader_rva + import_loader_offs);
         final_layout->lz77_data      = make_uint32_le((uint32_t)layout->image_base + layout->lz77_data_rva);
-        final_layout->lz77_decomp    = make_uint32_le((uint32_t)layout->image_base + layout->lz77_decompressor_rva);
+        final_layout->lz77_decomp    = make_uint32_le((uint32_t)layout->image_base + layout->lz77_decompressor_rva + lz77_decomp_offs);
         final_layout->comp_data      = make_uint32_le((uint32_t)layout->image_base + layout->comp_data_rva);
         final_layout->mini_iat       = make_uint32_le((uint32_t)layout->image_base + layout->mini_iat_rva);
         final_layout->lz77_data_size = make_uint32_le(lz77_data_size);
@@ -935,9 +950,9 @@ static int add_live_layout(BUFFER   output,
         final_layout->image_base     = make_uint64_le(layout->image_base);
         final_layout->entry_point    = make_uint64_le(layout->image_base + entry_point);
         final_layout->iat            = make_uint64_le(layout->image_base + layout->iat_rva);
-        final_layout->import_loader  = make_uint64_le(layout->image_base + layout->import_loader_rva);
+        final_layout->import_loader  = make_uint64_le(layout->image_base + layout->import_loader_rva + import_loader_offs);
         final_layout->lz77_data      = make_uint64_le(layout->image_base + layout->lz77_data_rva);
-        final_layout->lz77_decomp    = make_uint64_le(layout->image_base + layout->lz77_decompressor_rva);
+        final_layout->lz77_decomp    = make_uint64_le(layout->image_base + layout->lz77_decompressor_rva + lz77_decomp_offs);
         final_layout->comp_data      = make_uint64_le(layout->image_base + layout->comp_data_rva);
         final_layout->mini_iat       = make_uint64_le(layout->image_base + layout->mini_iat_rva);
         final_layout->lz77_data_size = make_uint32_le(lz77_data_size);
@@ -978,6 +993,9 @@ BUFFER exe_pe(const void *buf, size_t size)
     uint32_t              va_end         = 0;
     uint32_t              lz77_data_size = 0;
     uint32_t              new_hdr_size;
+    uint32_t              import_loader_offs;
+    uint32_t              lz77_decomp_offs;
+    uint32_t              arith_decoder_offs;
     unsigned int          i;
     int                   error          = 1;
     uint16_t              pe_flags;
@@ -1261,7 +1279,8 @@ BUFFER exe_pe(const void *buf, size_t size)
 
     /* Add import loader */
     import_loader = output;
-    if (add_loader(&import_loader, "pe_load_imports", machine))
+    import_loader_offs = add_loader(&import_loader, "pe_load_imports", machine);
+    if (import_loader_offs == ~0U)
         goto cleanup;
 
     output = buf_get_tail(output, import_loader.size);
@@ -1285,7 +1304,8 @@ BUFFER exe_pe(const void *buf, size_t size)
 
     /* Add LZ77 decompressor */
     lz77_decomp = output;
-    if (add_loader(&lz77_decomp, "pe_lz_decompress", machine))
+    lz77_decomp_offs = add_loader(&lz77_decomp, "pe_lz_decompress", machine);
+    if (lz77_decomp_offs == ~0U)
         goto cleanup;
 
     lz77_data_size       = (uint32_t)lz77_decomp.size;
@@ -1311,7 +1331,8 @@ BUFFER exe_pe(const void *buf, size_t size)
 
     /* Add arithmetic decoder */
     arith_decoder = output;
-    if (add_loader(&arith_decoder, "pe_arith_decode", machine))
+    arith_decoder_offs = add_loader(&arith_decoder, "pe_arith_decode", machine);
+    if (arith_decoder_offs == ~0U)
         goto cleanup;
 
     output                = buf_get_tail(output, arith_decoder.size);
@@ -1337,11 +1358,17 @@ BUFFER exe_pe(const void *buf, size_t size)
                         &layout,
                         get_uint32_le(opt_header->entry_point),
                         pe_format,
+                        import_loader_offs,
+                        lz77_decomp_offs,
                         lz77_data_size,
                         (uint32_t)compressed.compressed))
         goto cleanup;
 
-    new_hdr_size = fill_pe_header(&new_pe_header, &layout, pe_header, opt_header);
+    new_hdr_size = fill_pe_header(&new_pe_header,
+                                  &layout,
+                                  layout.arith_decoder_rva + arith_decoder_offs,
+                                  pe_header,
+                                  opt_header);
 
     printf("Process virtual address space layout:\n");
     printf("        image base               0x%" PRIx64 "\n",   layout.image_base);
