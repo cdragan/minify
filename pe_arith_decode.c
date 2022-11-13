@@ -5,7 +5,7 @@
 #include "arith_decode.h"
 #include "pe_common.h"
 
-const LIVE_LAYOUT *live_layout;
+const LIVE_LAYOUT *live_layout = (LIVE_LAYOUT *)(uintptr_t)0xFACECAFEBEEFF00D;
 
 int STDCALL loader(void)
 {

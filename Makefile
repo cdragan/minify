@@ -117,6 +117,7 @@ ifeq ($(UNAME), Windows)
     STUB_LDFLAGS += -nologo
     STUB_LDFLAGS += -subsystem:windows
     STUB_LDFLAGS += -entry:loader
+    STUB_LDFLAGS += -merge:.data=.text
 
     DISASM_COMMAND = dumpbin -disasm -section:.text -nologo -out:$1 $2
 else
