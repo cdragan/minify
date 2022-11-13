@@ -80,7 +80,10 @@ ifeq ($(UNAME), Windows)
     WFLAGS += -W3
 
     ifeq ($(debug), 0)
-        CFLAGS  += -O2 -Oi -DNDEBUG -MT -GL
+        CFLAGS  += -O2 -Oi -DNDEBUG -MT
+        ifneq ($(CC), clang-cl.exe)
+            CFLAGS += -GL
+        endif
         LDFLAGS += -ltcg
     else
         CFLAGS  += -D_DEBUG -Zi -MTd
@@ -101,10 +104,14 @@ ifeq ($(UNAME), Windows)
     COMPILER_OUTPUT = -Fo$1
     LINKER_OUTPUT   = -out:$1
 
-    STUB_CFLAGS += -O1 -Oi -DNDEBUG -MT -GL-
+    STUB_CFLAGS += -O1 -Oi -DNDEBUG -MT
     STUB_CFLAGS += -DNOSTDLIB -D_NO_CRT_STDIO_INLINE -Zc:threadSafeInit- -GS- -Gs9999999
     STUB_CFLAGS += -nologo
     STUB_CFLAGS += -GR- -TP -EHa- -FS
+
+    ifneq ($(CC), clang-cl.exe)
+        STUB_CFLAGS += -GL-
+    endif
 
     STUB_LDFLAGS += -nodefaultlib -stack:0x100000,0x100000
     STUB_LDFLAGS += -nologo
