@@ -6,3 +6,6 @@ Out
 
 # Temporary dir for local experiments
 tmp
+
+# Visual Studio generated files
+vc140.pdb
