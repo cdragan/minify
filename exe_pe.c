@@ -779,7 +779,7 @@ static uint32_t add_loader(BUFFER *output, const char *loader_name, uint32_t mac
     }
 
     pe_header    = (const PE_HEADER *)at_offset(file_buf.buf, pe_offset);
-    opt_header   = (const PE32_HEADER *)at_offset(file_buf.buf, pe_offset + sizeof(PE_HEADER));
+    opt_header   = (const PE32_HEADER *)at_offset(file_buf.buf, pe_offset + (uint32_t)sizeof(PE_HEADER));
     sect_offset  = pe_offset + (uint32_t)sizeof(PE_HEADER) + get_uint16_le(pe_header->optional_hdr_size);
     num_sections = get_uint16_le(pe_header->number_of_sections);
 
