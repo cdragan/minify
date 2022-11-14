@@ -3,8 +3,10 @@
  */
 
 #include "exe_pe.h"
+#include "arith_decode.h"
 #include "arith_encode.h"
 #include "load_file.h"
+#include "lza_decompress.h"
 #include "lza_compress.h"
 
 #include <assert.h>
@@ -964,6 +966,46 @@ static int add_live_layout(BUFFER   output,
     return 0;
 }
 
+static int verify_compression(BUFFER   process_va,
+                              LAYOUT  *layout,
+                              BUFFER   scratch,
+                              uint32_t lz77_data_size,
+                              uint32_t comp_data_size)
+{
+    BUFFER arith_output;
+    BUFFER decompressed;
+    BUFFER comp_data;
+    BUFFER orig_lz77_data;
+
+    if (scratch.size < lz77_data_size + layout->lz77_data_rva) {
+        fprintf(stderr, "Error: Not enough buffer space to verify compression\n");
+        return 1;
+    }
+
+    arith_output   = buf_truncate(scratch, lz77_data_size);
+    scratch        = buf_get_tail(scratch, lz77_data_size);
+    decompressed   = buf_truncate(scratch, layout->lz77_data_rva);
+    comp_data      = buf_slice(process_va, layout->comp_data_rva, comp_data_size);
+    orig_lz77_data = buf_slice(process_va, layout->lz77_data_rva, lz77_data_size);
+
+    arith_decode(arith_output.buf, arith_output.size,
+                 comp_data.buf,    comp_data.size);
+
+    if (memcmp(orig_lz77_data.buf, arith_output.buf, arith_output.size) != 0) {
+        fprintf(stderr, "Error: Arithmetic decoding verification failed\n");
+        return 1;
+    }
+
+    lz_decompress(decompressed.buf, decompressed.size, arith_output.buf);
+
+    if (memcmp(process_va.buf, decompressed.buf, decompressed.size) != 0) {
+        fprintf(stderr, "Error: LZ77 decompression verification failed\n");
+        return 1;
+    }
+
+    return 0;
+}
+
 BUFFER exe_pe(const void *buf, size_t size)
 {
     const PE_HEADER      *pe_header;
@@ -1151,7 +1193,7 @@ BUFFER exe_pe(const void *buf, size_t size)
     }
 
     va_end     = align_up(va_end, 0x1000);
-    alloc_size = va_end + estimate_compress_size(va_end);
+    alloc_size = va_end * 3 + estimate_compress_size(va_end);
     mem_image  = buf_alloc(alloc_size);
     process_va = buf_truncate(mem_image, va_end);
     output     = buf_get_tail(mem_image, va_end);
@@ -1292,7 +1334,7 @@ BUFFER exe_pe(const void *buf, size_t size)
 
     /* Compress the program's address space with LZ77 */
     lz77_data  = output;
-    compressed = lz_compress(lz77_data.buf, lz77_data.size, process_va.buf, process_va.size + iat_data.size);
+    compressed = lz_compress(lz77_data.buf, lz77_data.size, process_va.buf, layout.lz77_data_rva);
 
     if ( ! compressed.lz)
         goto cleanup;
@@ -1363,6 +1405,7 @@ BUFFER exe_pe(const void *buf, size_t size)
                         lz77_data_size,
                         (uint32_t)compressed.compressed))
         goto cleanup;
+    output = buf_get_tail(output, layout.end_rva - layout.live_layout_rva);
 
     new_hdr_size = fill_pe_header(&new_pe_header,
                                   &layout,
@@ -1382,6 +1425,10 @@ BUFFER exe_pe(const void *buf, size_t size)
     printf("        mini iat rva             0x%x (%u bytes)\n", layout.mini_iat_rva,          layout.live_layout_rva - layout.mini_iat_rva);
     printf("        live layout rva          0x%x (%u bytes)\n", layout.live_layout_rva,       layout.end_rva - layout.live_layout_rva);
     printf("        end rva                  0x%x\n",            layout.end_rva);
+
+    /* Verify compression */
+    if (verify_compression(mem_image, &layout, output, lz77_data_size, (uint32_t)compressed.compressed))
+        goto cleanup;
 
     /* Produce final file image */
     output = mem_image;
