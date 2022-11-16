@@ -18,7 +18,7 @@ int STDCALL loader(const LIVE_LAYOUT *layout)
         module = layout->mini_iat->load_library(name);
 
         /* Note: assume little-endian */
-        func = (FUNCTION_TYPE *)((uintptr_t)(layout->image_base) +
+        func = (FUNCTION_TYPE *)((uintptr_t)(layout->decomp_base) +
                                  (uint32_t)(uint8_t)import_names[0] +
                                  ((uint32_t)(uint8_t)import_names[1] << 8) +
                                  ((uint32_t)(uint8_t)import_names[2] << 16) +

@@ -19,14 +19,15 @@
 
 /*
  * Layout of the program/code/data in memory is represented by the LAYOUT structure
- * as well as the following diagram:
+ * as well as the following diagram.  Note that all fields except image_base are
+ * Relative Virtual Addresses (rvas), i.e. are relative to image_base.
  *
  * 0 ------------------> +----------------+ <- The beginning of the process's virtual address space
  *                       :                :
  *                       :                :
- * image_base ---------> +----------------+ <- Virtual address at which the process is loaded;
- *                       |                |    all other addresses are relative to this address,
- *                       |    original    |    hence they are called rvas (Relative Virtual Addresses)
+ * image_base ---------> +----------------+ <- Virtual address at which the process is loaded
+ * decomp_base_rva ----> +----------------+ <- Start of first section, this is where data is decompressed
+ *                       |    original    |
  *                       |    process     |
  *                       |    data        | <- Original process data is located in this block;
  *                       |                |    in the new exe this area is reserved and this is where
@@ -67,6 +68,7 @@
 
 typedef struct {
     uint64_t image_base;
+    uint32_t decomp_base_rva;
     uint32_t iat_rva;
     uint32_t import_loader_rva;
     uint32_t lz77_data_rva;
@@ -336,11 +338,17 @@ typedef struct {
 #define SECTION_MEM_READ               0x40000000U
 #define SECTION_MEM_WRITE              0x80000000U
 
+/* Size of the new PE header.  It has to be aligned to file_alignment; minimum file_alignment is
+ * 512 bytes.  It cannot be zero.  Therefore it must be exactly 512.
+ */
+static const uint32_t new_header_size = 512;
+
 /* The new/minimal PE header is a merged MZ, PE and optional header.
  * This is the header we will produce in the compressed executable.
  */
 typedef struct {
     uint32_le mz_signature;
+    uint32_le unused[3];
     uint32_le pe_signature; /* Exploit the unused portion of the MZ (DOS) header */
     uint16_le machine;
     uint16_le number_of_sections;
@@ -356,7 +364,7 @@ typedef struct {
     uint32_le size_of_data;
     uint32_le size_of_uninitialized_data;
     uint32_le entry_point;
-    uint32_le base_of_code;
+    uint32_le pe_offset; /* This overlaps with base_of_code, must be the same value */
     union {
         struct {
             uint32_le base_of_data;
@@ -366,7 +374,7 @@ typedef struct {
             uint64_le image_base;
         } u64;
     } u1;
-    uint32_le pe_offset; /* This overlaps with section_alignment, must be the same value */
+    uint32_le section_alignment;
     uint32_le file_alignment;
     uint16_le min_os_ver_major;
     uint16_le min_os_ver_minor;
@@ -388,7 +396,7 @@ typedef struct {
             uint32_le size_of_heap_commit;
             uint32_le reserved_loader_flags;
             uint32_le number_of_rva_and_sizes;
-            DATA_DIRECTORY rva_and_sizes[2];
+            DATA_DIRECTORY rva_and_sizes[4];
         } u32;
         struct {
             uint64_le size_of_stack_reserve;
@@ -401,60 +409,57 @@ typedef struct {
         } u64;
     } u2;
     SECTION_HEADER section_placeholder[2];
+    uint8_t        alignment_placeholder[new_header_size];
 } MINIMAL_PE_HEADER;
 
-static uint32_t fill_pe_header(MINIMAL_PE_HEADER *new_header,
-                               const LAYOUT      *layout,
-                               uint32_t           entry_point,
-                               const PE_HEADER   *pe_header,
-                               const PE32_HEADER *opt_header)
+static BUFFER prepare_pe_header(BUFFER             process_va,
+                                const PE_HEADER   *pe_header,
+                                const PE32_HEADER *opt_header)
 {
-    DATA_DIRECTORY      *data_dir;
     SECTION_HEADER      *section_header;
-    static const uint8_t mz32[4]     = { 0x4DU, 0x5AU, 0, 0 };
-    const uint32_t       pe_format   = get_uint16_le(opt_header->pe_format);
-    const uint32_t       aligned_end = align_up(layout->end_rva, 0x1000);
-    static const char    sec_bss[8]  = "unpack";
-    static const char    sec_text[8] = "packed";
-    const uint32_t       sec_flags   = SECTION_CNT_CODE | SECTION_MEM_EXECUTE |
-                                       SECTION_MEM_READ | SECTION_MEM_WRITE;
-    uint32_t             final_size;
+    BUFFER               header_buf   = buf_truncate(process_va, new_header_size);
+    MINIMAL_PE_HEADER   *new_header   = (MINIMAL_PE_HEADER *)header_buf.buf;
+    static const uint8_t mz32[4]      = { 0x4DU, 0x5AU, 0, 0 };
+    const uint32_t       pe_format    = get_uint16_le(opt_header->pe_format);
+    const uint32_t       num_sections = (uint32_t)(sizeof(new_header->section_placeholder) / sizeof(new_header->section_placeholder[0]));
+    uint32_t             hdr_size;
+    static const char    sec_bss[8]   = "unpack";
+    static const char    sec_text[8]  = "packed";
+    const uint32_t       sec_flags    = SECTION_MEM_EXECUTE | SECTION_MEM_READ | SECTION_MEM_WRITE;
 
     section_header = (SECTION_HEADER *)((uint8_t *)&new_header->u2 +
             ((pe_format == PE_FORMAT_PE32) ? sizeof(new_header->u2.u32)
                                            : sizeof(new_header->u2.u64)));
 
-    final_size = (uint32_t)(uintptr_t)((uint8_t *)&section_header[2] - (uint8_t *)new_header);
+    hdr_size = (uint32_t)(uintptr_t)((uint8_t *)&section_header[num_sections] - (uint8_t *)new_header);
+    assert(hdr_size <= new_header_size);
+
+    header_buf = buf_truncate(header_buf, hdr_size);
 
     memcpy(&new_header->mz_signature, mz32, sizeof(mz32));
     new_header->pe_signature            = pe_header->pe_signature;
     new_header->machine                 = pe_header->machine;
-    new_header->number_of_sections      = make_uint16_le(2);
+    new_header->number_of_sections      = make_uint16_le((uint16_t)num_sections);
     new_header->time_date_stamp         = pe_header->time_date_stamp;
     new_header->symbol_table_offset     = make_uint32_le(0);
     new_header->number_of_symbols       = make_uint32_le(0);
-    new_header->optional_hdr_size       = make_uint16_le(
-            (uint16_t)(uintptr_t)((uint8_t *)section_header - (uint8_t *)&new_header->pe_format));
+    new_header->optional_hdr_size       = make_uint16_le((uint16_t)(uintptr_t)(
+                (uint8_t *)section_header - (uint8_t *)&new_header->pe_format));
     new_header->flags                   = make_uint16_le(
             get_uint16_le(pe_header->flags) | PE_FLAG_RELOCS_STRIPPED);
     new_header->pe_format               = opt_header->pe_format;
     new_header->linker_ver_major        = opt_header->linker_ver_major;
     new_header->linker_ver_minor        = opt_header->linker_ver_minor;
-    new_header->size_of_code            = make_uint32_le(aligned_end);
-    new_header->size_of_data            = make_uint32_le(0);
-    new_header->size_of_uninitialized_data = make_uint32_le(0);
-    new_header->entry_point             = make_uint32_le(entry_point);
-    new_header->base_of_code            = make_uint32_le(0);
+    new_header->pe_offset               = make_uint32_le((uint32_t)(uintptr_t)(
+                (uint8_t *)&new_header->pe_signature - (uint8_t *)new_header));
 
-    if (pe_format == PE_FORMAT_PE32) {
-        new_header->u1.u32.base_of_data = make_uint32_le(0);
+    if (pe_format == PE_FORMAT_PE32)
         new_header->u1.u32.image_base   = opt_header->u1.u32.image_base;
-    }
     else
         new_header->u1.u64.image_base   = opt_header->u1.u64.image_base;
 
-    new_header->pe_offset               = make_uint32_le(sizeof(new_header->mz_signature));
-    new_header->file_alignment          = opt_header->file_alignment;
+    new_header->section_alignment       = opt_header->section_alignment;
+    new_header->file_alignment          = make_uint32_le(new_header_size);
     new_header->min_os_ver_major        = opt_header->min_os_ver_major;
     new_header->min_os_ver_minor        = opt_header->min_os_ver_minor;
     new_header->image_ver_major         = opt_header->image_ver_major;
@@ -462,45 +467,70 @@ static uint32_t fill_pe_header(MINIMAL_PE_HEADER *new_header,
     new_header->subsystem_ver_major     = opt_header->subsystem_ver_major;
     new_header->subsystem_ver_minor     = opt_header->subsystem_ver_minor;
     new_header->reserved_win32_version  = opt_header->reserved_win32_version;
-    new_header->size_of_image           = make_uint32_le(aligned_end);
-    new_header->size_of_headers         = make_uint32_le(align_up(final_size, get_uint32_le(new_header->file_alignment)));
+    new_header->size_of_headers         = make_uint32_le(new_header_size);
     new_header->checksum                = opt_header->checksum;
     new_header->subsystem               = opt_header->subsystem;
     new_header->dll_flags               = opt_header->dll_flags;
 
     if (pe_format == PE_FORMAT_PE32) {
         memcpy(&new_header->u2.u32, &opt_header->u2.u32, sizeof(opt_header->u2.u32));
-        new_header->u2.u32.number_of_rva_and_sizes = make_uint32_le(2);
-        data_dir = new_header->u2.u32.rva_and_sizes;
+        new_header->u2.u32.number_of_rva_and_sizes = make_uint32_le((uint32_t)(
+                    sizeof(new_header->u2.u32.rva_and_sizes) / sizeof(new_header->u2.u32.rva_and_sizes[0])));
     }
     else {
         memcpy(&new_header->u2.u64, &opt_header->u2.u64, sizeof(opt_header->u2.u64));
-        new_header->u2.u64.number_of_rva_and_sizes = make_uint32_le(2);
-        data_dir = new_header->u2.u64.rva_and_sizes;
+        new_header->u2.u64.number_of_rva_and_sizes = make_uint32_le((uint32_t)(
+                    sizeof(new_header->u2.u64.rva_and_sizes) / sizeof(new_header->u2.u64.rva_and_sizes[0])));
     }
-
-    data_dir[DIR_EXPORT_TABLE].virtual_address = make_uint32_le(0);
-    data_dir[DIR_EXPORT_TABLE].size            = make_uint32_le(0);
-    data_dir[DIR_IMPORT_TABLE].virtual_address = make_uint32_le(layout->import_dir_rva);
-    data_dir[DIR_IMPORT_TABLE].size            = make_uint32_le(2 * sizeof(IMPORT_DIR_ENTRY));
-
-    memset(section_header, 0, 2 * sizeof(*section_header));
 
     assert(sizeof(section_header[0].name) == sizeof(sec_bss));
     memcpy(section_header[0].name, sec_bss, sizeof(sec_bss));
-    section_header[0].virtual_address = make_uint32_le(0);
-    section_header[0].virtual_size    = make_uint32_le(layout->comp_data_rva);
-    section_header[0].flags           = make_uint32_le(sec_flags);
 
     assert(sizeof(section_header[1].name) == sizeof(sec_text));
     memcpy(section_header[1].name, sec_text, sizeof(sec_text));
+
+    return header_buf;
+}
+
+static void fill_pe_header(BUFFER             process_va,
+                           const LAYOUT      *layout,
+                           uint32_t           entry_point,
+                           const PE32_HEADER *opt_header)
+{
+    DATA_DIRECTORY    *data_dir;
+    SECTION_HEADER    *section_header;
+    MINIMAL_PE_HEADER *new_header   = (MINIMAL_PE_HEADER *)process_va.buf;
+    const uint32_t     pe_format    = get_uint16_le(opt_header->pe_format);
+    const uint32_t     aligned_end  = align_up(layout->end_rva, 0x1000);
+    const uint32_t     num_sections = (uint32_t)(sizeof(new_header->section_placeholder) / sizeof(new_header->section_placeholder[0]));
+    const uint32_t     sec_flags    = SECTION_MEM_EXECUTE | SECTION_MEM_READ | SECTION_MEM_WRITE;
+
+    section_header = (SECTION_HEADER *)((uint8_t *)&new_header->u2 +
+            ((pe_format == PE_FORMAT_PE32) ? sizeof(new_header->u2.u32)
+                                           : sizeof(new_header->u2.u64)));
+
+    new_header->size_of_code            = make_uint32_le(aligned_end);
+    new_header->entry_point             = make_uint32_le(entry_point);
+    new_header->size_of_image           = make_uint32_le(aligned_end);
+
+    if (pe_format == PE_FORMAT_PE32)
+        data_dir = new_header->u2.u32.rva_and_sizes;
+    else
+        data_dir = new_header->u2.u64.rva_and_sizes;
+
+    data_dir[DIR_IMPORT_TABLE].virtual_address = make_uint32_le(layout->import_dir_rva);
+    data_dir[DIR_IMPORT_TABLE].size            = make_uint32_le(2 * sizeof(IMPORT_DIR_ENTRY));
+
+    section_header[0].virtual_address     = make_uint32_le(layout->decomp_base_rva);
+    section_header[0].virtual_size        = make_uint32_le(layout->comp_data_rva - layout->decomp_base_rva);
+    section_header[0].flags               = make_uint32_le(SECTION_CNT_UNINITIALIZED_DATA | sec_flags);
+    section_header[0].pointer_to_raw_data = make_uint32_le(new_header_size);
+
     section_header[1].virtual_address     = make_uint32_le(layout->comp_data_rva);
     section_header[1].virtual_size        = make_uint32_le(aligned_end - layout->comp_data_rva);
-    section_header[1].flags               = make_uint32_le(sec_flags);
+    section_header[1].flags               = make_uint32_le(SECTION_CNT_INITIALIZED_DATA | sec_flags);
     section_header[1].size_of_raw_data    = make_uint32_le(layout->end_rva - layout->comp_data_rva);
-    section_header[1].pointer_to_raw_data = make_uint32_le(final_size);
-
-    return final_size;
+    section_header[1].pointer_to_raw_data = make_uint32_le(new_header_size);
 }
 
 static void append_str(char *buf, size_t size, const char *str)
@@ -620,16 +650,17 @@ static void clear_address_table(BUFFER process_va, uint32_t rva, int is_64bit)
         if ( ! value)
             break;
 
-        entry = buf_at_offset(process_va, value, 3);
+        entry = buf_at_offset(process_va, (uint32_t)value, 3);
 
         memset(entry, 0, 2 + strlen((char *)entry + 2));
     }
 }
 
-static int process_import_table(BUFFER  process_va,
-                                BUFFER  import_table,
-                                BUFFER *iat_data,
-                                int     is_64bit)
+static int process_import_table(BUFFER   process_va,
+                                BUFFER   import_table,
+                                uint32_t va_start,
+                                BUFFER  *iat_data,
+                                int      is_64bit)
 {
     IMPORT_DIR_ENTRY       *import_dir_entry = (IMPORT_DIR_ENTRY *)import_table.buf;
     IMPORT_DIR_ENTRY *const import_table_end = (IMPORT_DIR_ENTRY *)(import_table.buf + import_table.size);
@@ -661,7 +692,7 @@ static int process_import_table(BUFFER  process_va,
          * IAT on its own after it is loaded.
          */
         iat_size += push_iat_string(&iat_buf_left, dll_name);
-        iat_size += push_iat_uint32(&iat_buf_left, import_address_table_rva);
+        iat_size += push_iat_uint32(&iat_buf_left, import_address_table_rva - va_start);
 
         rva = import_address_table_rva;
         for (;;) {
@@ -841,8 +872,8 @@ cleanup:
 static uint32_t add_mini_import_dir(BUFFER *output, uint32_t import_dir_rva, uint16_t pe_format)
 {
     static const char str_kernel32_dll[]     = "KERNEL32.dll";
-    static const char str_load_library_a[]   = "LoadLibraryA";
-    static const char str_get_proc_address[] = "GetProcAddress";
+    static const char str_load_library_a[]   = "\0\0LoadLibraryA";
+    static const char str_get_proc_address[] = "\0\0GetProcAddress";
 
     IMPORT_DIR_ENTRY *import_dir    = (IMPORT_DIR_ENTRY *)output->buf;
     uint32_le        *iat;
@@ -850,8 +881,8 @@ static uint32_t add_mini_import_dir(BUFFER *output, uint32_t import_dir_rva, uin
     const uint32_t    iat_size      = 3 * (pe_format == PE_FORMAT_PE32 ? 4 : 8);
     const uint32_t    kernel_offs   = iat_offs + iat_size;
     const uint32_t    load_lib_offs = kernel_offs + (uint32_t)sizeof(str_kernel32_dll);
-    const uint32_t    get_proc_offs = align_up(2 + load_lib_offs + (uint32_t)sizeof(str_load_library_a), 2);
-    const uint32_t    total_size    = align_up(2 + get_proc_offs + (uint32_t)sizeof(str_get_proc_address), 2);
+    const uint32_t    get_proc_offs = align_up(load_lib_offs + (uint32_t)sizeof(str_load_library_a), 2);
+    const uint32_t    total_size    = align_up(get_proc_offs + (uint32_t)sizeof(str_get_proc_address), 2);
 
     if (get_proc_offs + sizeof(str_get_proc_address) > output->size) {
         fprintf(stderr, "Error: Not enough buffer space for import address table\n");
@@ -879,9 +910,9 @@ static uint32_t add_mini_import_dir(BUFFER *output, uint32_t import_dir_rva, uin
     }
 
     /* Copy strings */
-    memcpy(buf_at_offset(*output, kernel_offs,       sizeof(str_kernel32_dll)),     str_kernel32_dll,     sizeof(str_kernel32_dll));
-    memcpy(buf_at_offset(*output, load_lib_offs + 2, sizeof(str_load_library_a)),   str_load_library_a,   sizeof(str_load_library_a));
-    memcpy(buf_at_offset(*output, get_proc_offs + 2, sizeof(str_get_proc_address)), str_get_proc_address, sizeof(str_get_proc_address));
+    memcpy(buf_at_offset(*output, kernel_offs,   sizeof(str_kernel32_dll)),     str_kernel32_dll,     sizeof(str_kernel32_dll));
+    memcpy(buf_at_offset(*output, load_lib_offs, sizeof(str_load_library_a)),   str_load_library_a,   sizeof(str_load_library_a));
+    memcpy(buf_at_offset(*output, get_proc_offs, sizeof(str_get_proc_address)), str_get_proc_address, sizeof(str_get_proc_address));
 
     /* Update buffer size */
     output->size = total_size;
@@ -891,7 +922,7 @@ static uint32_t add_mini_import_dir(BUFFER *output, uint32_t import_dir_rva, uin
 }
 
 typedef struct {
-    uint32_le image_base;
+    uint32_le decomp_base;
     uint32_le entry_point;
     uint32_le iat;
     uint32_le import_loader;
@@ -904,7 +935,7 @@ typedef struct {
 } FINAL_LAYOUT_32;
 
 typedef struct {
-    uint64_le image_base;
+    uint64_le decomp_base;
     uint64_le entry_point;
     uint64_le iat;
     uint64_le import_loader;
@@ -933,7 +964,7 @@ static int add_live_layout(BUFFER   output,
     if (pe_format == PE_FORMAT_PE32) {
         FINAL_LAYOUT_32 *final_layout = (FINAL_LAYOUT_32 *)output.buf;
 
-        final_layout->image_base     = make_uint32_le((uint32_t)layout->image_base);
+        final_layout->decomp_base    = make_uint32_le((uint32_t)layout->image_base + layout->decomp_base_rva);
         final_layout->entry_point    = make_uint32_le((uint32_t)layout->image_base + entry_point);
         final_layout->iat            = make_uint32_le((uint32_t)layout->image_base + layout->iat_rva);
         final_layout->import_loader  = make_uint32_le((uint32_t)layout->image_base + layout->import_loader_rva + import_loader_offs);
@@ -949,7 +980,7 @@ static int add_live_layout(BUFFER   output,
     else {
         FINAL_LAYOUT_64 *final_layout = (FINAL_LAYOUT_64 *)output.buf;
 
-        final_layout->image_base     = make_uint64_le(layout->image_base);
+        final_layout->decomp_base    = make_uint64_le(layout->image_base + layout->decomp_base_rva);
         final_layout->entry_point    = make_uint64_le(layout->image_base + entry_point);
         final_layout->iat            = make_uint64_le(layout->image_base + layout->iat_rva);
         final_layout->import_loader  = make_uint64_le(layout->image_base + layout->import_loader_rva + import_loader_offs);
@@ -984,7 +1015,7 @@ static int verify_compression(BUFFER   process_va,
 
     arith_output   = buf_truncate(scratch, lz77_data_size);
     scratch        = buf_get_tail(scratch, lz77_data_size);
-    decompressed   = buf_truncate(scratch, layout->lz77_data_rva);
+    decompressed   = buf_truncate(scratch, layout->lz77_data_rva - layout->decomp_base_rva);
     comp_data      = buf_slice(process_va, layout->comp_data_rva, comp_data_size);
     orig_lz77_data = buf_slice(process_va, layout->lz77_data_rva, lz77_data_size);
 
@@ -998,12 +1029,79 @@ static int verify_compression(BUFFER   process_va,
 
     lz_decompress(decompressed.buf, decompressed.size, arith_output.buf);
 
-    if (memcmp(process_va.buf, decompressed.buf, decompressed.size) != 0) {
+    if (memcmp(process_va.buf + layout->decomp_base_rva, decompressed.buf, decompressed.size) != 0) {
         fprintf(stderr, "Error: LZ77 decompression verification failed\n");
         return 1;
     }
 
     return 0;
+}
+
+static void patch_32bit_arith_decoder(BUFFER buf, const LAYOUT *layout)
+{
+    const uint32_t ad_delta = (uint32_t)(layout->arith_decoder_rva - layout->decomp_base_rva);
+    const uint32_t base     = (uint32_t)(layout->image_base + layout->decomp_base_rva);
+    const uint32_t end      = (uint32_t)(base + buf.size);
+    const uint8_t  msb      = (uint8_t)(base >> 24);
+    uint8_t       *next     = buf.buf;
+
+    while (buf.size > 3) {
+        uint8_t *const found = (uint8_t *)memchr(buf.buf + 3, msb, buf.size - 3);
+        size_t         pos;
+        uint32_le     *pvalue;
+        uint32_t       value;
+
+        if ( ! found)
+            break;
+
+        pos    = (size_t)(found - buf.buf);
+        pvalue = (uint32_le *)(found - 3);
+        value  = get_uint32_le(*pvalue);
+
+        if (value < base || value >= end) {
+            buf = buf_get_tail(buf, pos - 2);
+            continue;
+        }
+
+        *pvalue = make_uint32_le(value + ad_delta);
+
+        buf = buf_get_tail(buf, pos + 1);
+    }
+}
+
+static int patch_live_layout(BUFFER buf, uint16_t pe_format, const LAYOUT *layout)
+{
+    static const uint8_t signature[] = { 0x0D, 0xF0, 0xEF, 0xBE, 0xFE, 0xCA, 0xCE, 0xFA };
+    const size_t         sig_size    = (pe_format == PE_FORMAT_PE32) ? 4 : 8;
+    const uint64_t       layout_va   = layout->image_base + layout->live_layout_rva;
+
+    if (pe_format == PE_FORMAT_PE32)
+        patch_32bit_arith_decoder(buf, layout);
+
+    for (;;) {
+        uint8_t *const found = (uint8_t *)memchr(buf.buf, 0x0D, buf.size);
+        size_t         pos;
+
+        if ( ! found)
+            break;
+
+        pos = (size_t)(found - buf.buf);
+
+        if (buf.size - pos < sig_size)
+            break;
+
+        if (memcmp(found, signature, sig_size) == 0) {
+            const uint64_le out_layout_va = make_uint64_le(layout_va);
+
+            memcpy(found, out_layout_va.bytes, sig_size);
+            return 0;
+        }
+
+        buf = buf_get_tail(buf, pos + 1);
+    }
+
+    fprintf(stderr, "Error: Live layout signature not found in pe_arith_decode loader\n");
+    return 1;
 }
 
 BUFFER exe_pe(const void *buf, size_t size)
@@ -1012,7 +1110,6 @@ BUFFER exe_pe(const void *buf, size_t size)
     const PE32_HEADER    *opt_header;
     const DATA_DIRECTORY *data_dir;
     const SECTION_HEADER *section_header;
-    MINIMAL_PE_HEADER     new_pe_header;
     LAYOUT                layout         = { 0 };
     COMPRESSED_SIZES      compressed;
     size_t                alloc_size;
@@ -1025,6 +1122,7 @@ BUFFER exe_pe(const void *buf, size_t size)
     BUFFER                lz77_decomp    = { NULL, 0 };
     BUFFER                comp_data      = { NULL, 0 };
     BUFFER                arith_decoder  = { NULL, 0 };
+    BUFFER                header_data    = { NULL, 0 }; /* Put some data in the headers, which are loaded at image_base */
     uint32_t              machine;
     uint32_t              dir_size;
     const uint32_t        pe_offset      = get_pe_offset(buf, size);
@@ -1034,7 +1132,6 @@ BUFFER exe_pe(const void *buf, size_t size)
     uint32_t              va_start       = ~0U;
     uint32_t              va_end         = 0;
     uint32_t              lz77_data_size = 0;
-    uint32_t              new_hdr_size;
     uint32_t              import_loader_offs;
     uint32_t              lz77_decomp_offs;
     uint32_t              arith_decoder_offs;
@@ -1107,6 +1204,12 @@ BUFFER exe_pe(const void *buf, size_t size)
         return output;
     }
 
+    if (get_uint32_le(opt_header->section_alignment) != 0x1000) {
+        fprintf(stderr, "Error: Unexpected section alignment %u\n",
+                get_uint32_le(opt_header->section_alignment));
+        return output;
+    }
+
     /* Print optional header */
     printf("        PE flags                 0x%x\n",              pe_flags);
     printf("optional header:\n");
@@ -1170,6 +1273,10 @@ BUFFER exe_pe(const void *buf, size_t size)
         printf("        virtual_size             0x%x\n", get_uint32_le(section_header[i].virtual_size));
         printf("        flags                    0x%x%s\n", get_uint32_le(section_header[i].flags), str_flags);
 
+        if (section_va < 0x1000) {
+            fprintf(stderr, "Error: Unexpected section %u starting at RVA 0x%x\n", i, section_va);
+            return output;
+        }
         value = get_uint32_le(section_header[i].pointer_to_relocations);
         if (value) {
             fprintf(stderr, "Error: pointer_to_relocations is %u in section %u but expected 0\n", value, i);
@@ -1202,7 +1309,8 @@ BUFFER exe_pe(const void *buf, size_t size)
         layout.image_base = get_uint32_le(opt_header->u1.u32.image_base);
     else
         layout.image_base = get_uint64_le(opt_header->u1.u64.image_base);
-    layout.iat_rva = va_end;
+    layout.decomp_base_rva = va_start;
+    layout.iat_rva         = va_end;
 
     /* Load all sections into the right places */
     for (i = 0; i < num_sections; i++) {
@@ -1216,6 +1324,9 @@ BUFFER exe_pe(const void *buf, size_t size)
 
         memcpy(dest, src, copy_size);
     }
+
+    /* Prepare new PE header */
+    header_data = prepare_pe_header(process_va, pe_header, opt_header);
 
     /* Process data directory entries */
     if (pe_format == PE_FORMAT_PE32) {
@@ -1302,7 +1413,7 @@ BUFFER exe_pe(const void *buf, size_t size)
 
             case DIR_IMPORT_TABLE:
                 iat_data = output;
-                if (process_import_table(process_va, entry_buf, &iat_data,
+                if (process_import_table(process_va, entry_buf, va_start, &iat_data,
                                          pe_format == PE_FORMAT_PE32_PLUS))
                     goto cleanup;
 
@@ -1334,7 +1445,7 @@ BUFFER exe_pe(const void *buf, size_t size)
 
     /* Compress the program's address space with LZ77 */
     lz77_data  = output;
-    compressed = lz_compress(lz77_data.buf, lz77_data.size, process_va.buf, layout.lz77_data_rva);
+    compressed = lz_compress(lz77_data.buf, lz77_data.size, process_va.buf + va_start, layout.lz77_data_rva - va_start);
 
     if ( ! compressed.lz)
         goto cleanup;
@@ -1407,14 +1518,20 @@ BUFFER exe_pe(const void *buf, size_t size)
         goto cleanup;
     output = buf_get_tail(output, layout.end_rva - layout.live_layout_rva);
 
-    new_hdr_size = fill_pe_header(&new_pe_header,
-                                  &layout,
-                                  layout.arith_decoder_rva + arith_decoder_offs,
-                                  pe_header,
-                                  opt_header);
+    /* Patch arithmetic decoder to locate live layout */
+    if (patch_live_layout(arith_decoder, pe_format, &layout))
+        goto cleanup;
+
+    fill_pe_header(process_va,
+                   &layout,
+                   layout.arith_decoder_rva + arith_decoder_offs,
+                   opt_header);
+
+    printf("Wasted %u bytes in the header\n", new_header_size - (uint32_t)header_data.size);
 
     printf("Process virtual address space layout:\n");
     printf("        image base               0x%" PRIx64 "\n",   layout.image_base);
+    printf("        decomp base              0x%x\n",            layout.decomp_base_rva);
     printf("        iat rva                  0x%x (%u bytes)\n", layout.iat_rva,               layout.import_loader_rva - layout.iat_rva);
     printf("        import loader rva        0x%x (%u bytes)\n", layout.import_loader_rva,     layout.lz77_data_rva - layout.import_loader_rva);
     printf("        lz77 data rva            0x%x (%u bytes)\n", layout.lz77_data_rva,         layout.lz77_decompressor_rva - layout.lz77_data_rva);
@@ -1432,12 +1549,11 @@ BUFFER exe_pe(const void *buf, size_t size)
 
     /* Produce final file image */
     output = mem_image;
-    memcpy(output.buf, &new_pe_header, new_hdr_size);
-    memcpy(output.buf + new_hdr_size,
+    memcpy(output.buf + new_header_size,
            comp_data.buf,
            layout.end_rva - layout.comp_data_rva);
 
-    output.size = new_hdr_size + (layout.end_rva - layout.comp_data_rva);
+    output.size = new_header_size + (layout.end_rva - layout.comp_data_rva);
 
     error = 0;
 

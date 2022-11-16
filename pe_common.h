@@ -29,7 +29,7 @@ typedef int (* LOADER)(const LIVE_LAYOUT *layout);
  * in the executable file uncompressed and it is referenced directly.
  */
 struct LIVE_LAYOUT_STRUCT {
-    uint8_t       *image_base;
+    uint8_t       *decomp_base;
     ENTRY_POINT    entry_point;
     uint8_t       *iat;
     LOADER         import_loader;
