@@ -15,17 +15,34 @@
 static int save_file(const char *filename, BUFFER buf)
 {
     static char new_filename[1024];
+    static char prefix[] = "mini.";
     FILE       *file;
+    const char *slash;
     size_t      len;
 
     len = strlen(filename);
 
-    if (len + 4 > sizeof(new_filename)) {
+    slash = strrchr(filename, '/');
+
+#ifdef _WIN32
+    {
+        const char *const backslash = strrchr(filename, '\\');
+
+        if ( ! slash || (backslash > slash))
+            slash = backslash;
+    }
+#endif
+
+    if (len + sizeof(prefix) > sizeof(new_filename)) {
         fprintf(stderr, "Error: File name %s is too long\n", filename);
         return EXIT_FAILURE;
     }
 
-    snprintf(new_filename, sizeof(new_filename), "%s.new", filename);
+    snprintf(new_filename, sizeof(new_filename), "%.*s%s%s",
+             (int)(slash ? (slash - filename + 1) : 0),
+             filename,
+             prefix,
+             slash ? (slash + 1) : filename);
 
     file = fopen(new_filename, "wb");
     if ( ! file) {
