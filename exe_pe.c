@@ -409,7 +409,7 @@ typedef struct {
         } u64;
     } u2;
     SECTION_HEADER section_placeholder[2];
-    uint8_t        alignment_placeholder[new_header_size];
+    uint8_t        alignment_placeholder[512];
 } MINIMAL_PE_HEADER;
 
 static BUFFER prepare_pe_header(BUFFER             process_va,
@@ -425,7 +425,6 @@ static BUFFER prepare_pe_header(BUFFER             process_va,
     uint32_t             hdr_size;
     static const char    sec_bss[8]   = "unpack";
     static const char    sec_text[8]  = "packed";
-    const uint32_t       sec_flags    = SECTION_MEM_EXECUTE | SECTION_MEM_READ | SECTION_MEM_WRITE;
 
     section_header = (SECTION_HEADER *)((uint8_t *)&new_header->u2 +
             ((pe_format == PE_FORMAT_PE32) ? sizeof(new_header->u2.u32)
@@ -502,7 +501,6 @@ static void fill_pe_header(BUFFER             process_va,
     MINIMAL_PE_HEADER *new_header   = (MINIMAL_PE_HEADER *)process_va.buf;
     const uint32_t     pe_format    = get_uint16_le(opt_header->pe_format);
     const uint32_t     aligned_end  = align_up(layout->end_rva, 0x1000);
-    const uint32_t     num_sections = (uint32_t)(sizeof(new_header->section_placeholder) / sizeof(new_header->section_placeholder[0]));
     const uint32_t     sec_flags    = SECTION_MEM_EXECUTE | SECTION_MEM_READ | SECTION_MEM_WRITE;
 
     section_header = (SECTION_HEADER *)((uint8_t *)&new_header->u2 +
@@ -1043,7 +1041,6 @@ static void patch_32bit_arith_decoder(BUFFER buf, const LAYOUT *layout)
     const uint32_t base     = (uint32_t)(layout->image_base + layout->decomp_base_rva);
     const uint32_t end      = (uint32_t)(base + buf.size);
     const uint8_t  msb      = (uint8_t)(base >> 24);
-    uint8_t       *next     = buf.buf;
 
     while (buf.size > 3) {
         uint8_t *const found = (uint8_t *)memchr(buf.buf + 3, msb, buf.size - 3);
