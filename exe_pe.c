@@ -1458,15 +1458,23 @@ BUFFER exe_pe(const void *buf, size_t size)
         }
     }
 
-    /* Add import loader */
-    import_loader = output;
-    import_loader_offs = add_loader(&import_loader, "pe_load_imports", machine);
-    if (import_loader_offs == ~0U)
-        goto cleanup;
+    if (iat_data.size) {
 
-    output = buf_get_tail(output, import_loader.size);
+        /* Add import loader */
+        import_loader = output;
+        import_loader_offs = add_loader(&import_loader, "pe_load_imports", machine);
+        if (import_loader_offs == ~0U)
+            goto cleanup;
 
-    layout.lz77_data_rva = layout.import_loader_rva + (uint32_t)import_loader.size;
+        output = buf_get_tail(output, import_loader.size);
+
+        layout.lz77_data_rva = layout.import_loader_rva + (uint32_t)import_loader.size;
+    }
+    /* Ignore import table if it's absent */
+    else {
+        layout.import_loader_rva = layout.iat_rva;
+        layout.lz77_data_rva     = layout.iat_rva;
+    }
 
     /* TODO separate .text section into streams */
     /* TODO add loader to restore .text section */
