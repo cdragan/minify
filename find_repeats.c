@@ -150,36 +150,36 @@ static uint32_t compare(const uint8_t *buf, size_t left_pos, size_t right_pos, s
     return length;
 }
 
-static int calc_match_score(uint32_t distance, uint32_t length)
+static int calc_match_score(OCCURRENCE occ)
 {
     /* Number of bits if this was emitted as LIT packets (literals) */
-    const int lit_bits = 9 * (int)length;
+    const int lit_bits = 9 * (int)occ.length;
 
     /* Number of bits if this was emitted as MATCH packet */
     const int match_hdr_bits = 2;
-    const int length_bits    = (length <= 9) ? 4 : (length <= 17) ? 5 : 10;
-    const int distance_bits  = (distance < 2) ? 6 : (36 - count_leading_zeroes(distance));
+    const int length_bits    = (occ.length <= 9) ? 4 : (occ.length <= 17) ? 5 : (2 + LZA_LENGTH_TAIL_BITS);
+    const int distance_bits  = (occ.distance < 2) ? 6 : (36 - count_leading_zeroes(occ.distance));
     const int match_bits     = match_hdr_bits + length_bits + distance_bits;
 
     return lit_bits - match_bits;
 }
 
-static int calc_longrep_score(int longrep, uint32_t length)
+static int calc_longrep_score(OCCURRENCE occ)
 {
     /* Number of bits if this was emitted as LIT packets (literals) */
-    const int lit_bits = 9 * (int)length;
+    const int lit_bits = 9 * (int)occ.length;
 
     /* Number of bits if this was emitted as LONGREP* packet */
-    const int longrep_hdr_bits = (longrep < 2) ? 4 : 5;
-    const int length_bits      = (length <= 9) ? 4 : (length <= 17) ? 5 : 10;
+    const int longrep_hdr_bits = (occ.last < 2) ? 4 : 5;
+    const int length_bits      = (occ.length <= 9) ? 4 : (occ.length <= 17) ? 5 : (2 + LZA_LENGTH_TAIL_BITS);
     const int longrep_bits     = longrep_hdr_bits + length_bits;
 
     return lit_bits - longrep_bits;
 }
 
-static int calc_cond_longrep_score(int longrep, uint32_t length)
+static int calc_cond_longrep_score(OCCURRENCE occ)
 {
-    return longrep < 0 ? 0 : calc_longrep_score(longrep, length);
+    return occ.last < 0 ? 0 : calc_longrep_score(occ);
 }
 
 static int is_8_byte_aligned(const uint8_t *ptr)
@@ -257,6 +257,30 @@ static OCCURRENCE find_occurrence_at_last_dist(const uint8_t *buf,
     return occurrence;
 }
 
+/* Check if this match has some bytes following that could be used for *REP.
+ * Returns the number of LITs between the match and the potential *REP.
+ */
+static uint32_t check_trailing_rep(const uint8_t *buf,
+                                   size_t         pos,
+                                   size_t         size,
+                                   OCCURRENCE     occ)
+{
+    const size_t left              = pos - occ.distance + occ.length;
+    const size_t right             = pos + occ.length;
+    const size_t bytes_after_match = size - right;
+    uint32_t     i;
+
+    for (i = 1; i <= 3; i++) {
+        if (bytes_after_match <= i)
+            break;
+
+        if (buf[left + i] == buf[right + i])
+            return i;
+    }
+
+    return 0;
+}
+
 static OCCURRENCE find_longest_occurrence(const uint8_t    *buf,
                                           size_t            pos,
                                           size_t            size,
@@ -264,8 +288,10 @@ static OCCURRENCE find_longest_occurrence(const uint8_t    *buf,
                                           const OFFSET_MAP *map)
 {
     OCCURRENCE   occurrence      = find_occurrence_at_last_dist(buf, pos, size, last_dist);
-    int          score           = calc_cond_longrep_score(occurrence.last, occurrence.length);
+    int          score           = calc_cond_longrep_score(occurrence);
     const size_t repeated_length = get_repeated_byte_length(buf, pos, size);
+    uint32_t     trailing_rep    = occurrence.distance ?
+                    check_trailing_rep(buf, pos, size, occurrence) : 0;
 
     uint32_t chunk_id = map->pair_ids[get_map_idx(buf, pos)];
 
@@ -274,65 +300,72 @@ static OCCURRENCE find_longest_occurrence(const uint8_t    *buf,
         uint32_t              i;
 
         for (i = 0; i < MAX_OFFSETS; i++) {
-            uint32_t length;
-            uint32_t distance;
-            int      last;
-            int      cur_score;
+            OCCURRENCE occ;
+            int        cur_score;
+            uint32_t   cur_trailing_rep;
 
             const uint32_t old_pos = chunk->offset[i];
             if (old_pos == INVALID_ID)
                 continue;
 
-            length   = compare(buf, old_pos, pos, size);
-            distance = (uint32_t)pos - old_pos;
+            occ.length   = compare(buf, old_pos, pos, size);
+            occ.distance = (uint32_t)pos - old_pos;
 
             /* For repeated bytes, we only store the offset of the first pair,
              * so try to find shorter distance.
              */
-            if (length <= repeated_length && distance > 1) {
-                const size_t max_len = get_repeated_byte_length(buf, pos - distance, size);
+            if (occ.length <= repeated_length && occ.distance > 1) {
+                const size_t max_len = get_repeated_byte_length(buf, pos - occ.distance, size);
 
-                if (max_len > length) {
-                    const uint32_t diff = (uint32_t)(max_len - length);
+                if (max_len > occ.length) {
+                    const uint32_t diff = (uint32_t)(max_len - occ.length);
 
-                    if (diff < distance)
-                        distance -= diff;
+                    if (diff < occ.distance)
+                        occ.distance -= diff;
                     else
-                        distance = 1;
+                        occ.distance = 1;
 
                     /* Recalculate length in case other bytes after the repeated
                      * span can match.
                      */
-                    length = compare(buf, pos - distance, pos, size);
+                    occ.length = compare(buf, pos - occ.distance, pos, size);
                 }
             }
 
-            for (last = 3; last >= 0; last--)
-                if (distance == last_dist[last])
+            for (occ.last = 3; occ.last >= 0; occ.last--)
+                if (occ.distance == last_dist[occ.last])
                     break;
 
             /* Last distances already processed */
-            if (last >= 0)
+            if (occ.last >= 0)
                 continue;
 
-            cur_score = calc_match_score(distance, length);
+            cur_score = calc_match_score(occ);
 
-            if (cur_score <= score)
+            /* Prefer distances which encourage the use of subsequent SHORTREP */
+            cur_trailing_rep = check_trailing_rep(buf, pos, size, occ);
+
+            if (cur_trailing_rep) {
+                if (cur_score < score)
+                    continue;
+                if (trailing_rep && cur_trailing_rep > trailing_rep && cur_score <= score)
+                    continue;
+            }
+            else if (cur_score <= score)
                 continue;
 
             if (cur_score < 2)
                 continue;
 
-            if (length == 3 && distance > (1U << 11))
+            if (occ.length == 3 && occ.distance > (1U << 11))
                 continue;
 
-            if (length == 4 && distance > (1U << 13))
+            if (occ.length == 4 && occ.distance > (1U << 13))
                 continue;
 
-            occurrence.length   = length;
-            occurrence.distance = distance;
-            occurrence.last     = last;
-            score               = cur_score;
+            occurrence   = occ;
+            score        = cur_score;
+            trailing_rep = cur_trailing_rep;
         }
 
         chunk_id = chunk->next_id;
@@ -407,8 +440,8 @@ int find_repeats(const uint8_t *buf,
             const OCCURRENCE next_occurrence = find_occurrence_at_last_dist(buf, pos + 1, size, last_dist);
 
             if (next_occurrence.last >= 0) {
-                const int cur_score  = calc_match_score(occurrence.distance, occurrence.length);
-                const int next_score = calc_longrep_score(next_occurrence.last, next_occurrence.length);
+                const int cur_score  = calc_match_score(occurrence);
+                const int next_score = calc_longrep_score(next_occurrence);
 
                 /* If it is beneficial, report the current byte as LIT(eral) and start match from
                  * the next byte */
