@@ -20,7 +20,7 @@
 /*
  * Layout of the program/code/data in memory is represented by the LAYOUT structure
  * as well as the following diagram.  Note that all fields except image_base are
- * Relative Virtual Addresses (rvas), i.e. are relative to image_base.
+ * Relative Virtual Addresses (rvas), i.e. are offsets from image_base.
  *
  * 0 ------------------> +----------------+ <- The beginning of the process's virtual address space
  *                       :                :
@@ -169,11 +169,11 @@ static uint32_t align_up(uint32_t value, uint32_t align)
 /* The MZ (DOS) header is located at offset 0 in a PE file */
 typedef struct {
     uint16_le mz_signature;
-    uint8_t   garbage[0x3A];
+    uint8_t   useless[0x3A];
     uint32_le pe_offset;
 } DOS_HEADER;
 
-/* The PE header is located at offset `pe_offset` from the MZ header */
+/* The PE header is located at offset `pe_offset` from the beginning of the file */
 typedef struct {
     uint32_le pe_signature;
     uint16_le machine;
@@ -201,7 +201,7 @@ typedef struct {
     uint32_le size;
 } DATA_DIRECTORY;
 
-/* The optional header, which immediately follows the PE header.
+/* The "optional" header immediately follows the PE header.
  * The actual size of this header is specified in the PE header.
  */
 typedef struct {
@@ -281,7 +281,7 @@ typedef struct {
 #define DIR_CLR_RUNTIME_HEADER      14
 #define DIR_RESERVED                15
 
-/* An import directory RVA is specified by DIR_IMPORT_TABLE data directory */
+/* Import directory is located at an RVA specified by DIR_IMPORT_TABLE data directory */
 typedef struct {
     uint32_le import_lookup_table_rva;
     uint32_le time_stamp;
@@ -365,7 +365,7 @@ typedef struct {
     uint32_le size_of_uninitialized_data;
     uint32_le entry_point;
     uint32_le pe_offset; /* This overlaps with base_of_code, must be the same value */
-    union {
+    union { /* Different layout between 32-bit and 64-bit executable */
         struct {
             uint32_le base_of_data;
             uint32_le image_base;
@@ -388,7 +388,7 @@ typedef struct {
     uint32_le checksum;
     uint16_le subsystem;
     uint16_le dll_flags;
-    union {
+    union { /* Different layout between 32-bit and 64-bit executable */
         struct {
             uint32_le size_of_stack_reserve;
             uint32_le size_of_stack_commit;
@@ -396,7 +396,7 @@ typedef struct {
             uint32_le size_of_heap_commit;
             uint32_le reserved_loader_flags;
             uint32_le number_of_rva_and_sizes;
-            DATA_DIRECTORY rva_and_sizes[4];
+            DATA_DIRECTORY rva_and_sizes[2];
         } u32;
         struct {
             uint64_le size_of_stack_reserve;
@@ -473,13 +473,19 @@ static BUFFER prepare_pe_header(BUFFER             process_va,
 
     if (pe_format == PE_FORMAT_PE32) {
         memcpy(&new_header->u2.u32, &opt_header->u2.u32, sizeof(opt_header->u2.u32));
+
         new_header->u2.u32.number_of_rva_and_sizes = make_uint32_le((uint32_t)(
                     sizeof(new_header->u2.u32.rva_and_sizes) / sizeof(new_header->u2.u32.rva_and_sizes[0])));
+
+        memset(&new_header->u2.u32.rva_and_sizes[DIR_EXPORT_TABLE], 0, sizeof(DATA_DIRECTORY));
     }
     else {
         memcpy(&new_header->u2.u64, &opt_header->u2.u64, sizeof(opt_header->u2.u64));
+
         new_header->u2.u64.number_of_rva_and_sizes = make_uint32_le((uint32_t)(
                     sizeof(new_header->u2.u64.rva_and_sizes) / sizeof(new_header->u2.u64.rva_and_sizes[0])));
+
+        memset(&new_header->u2.u64.rva_and_sizes[DIR_EXPORT_TABLE], 0, sizeof(DATA_DIRECTORY));
     }
 
     assert(sizeof(section_header[0].name) == sizeof(sec_bss));
@@ -620,8 +626,8 @@ static size_t push_iat_string(BUFFER *buf, const char *str)
 
 static size_t push_iat_uint32(BUFFER *buf, uint32_t value)
 {
-    /* Note: assumes little-endian! */
-    return push_iat_data(buf, &value, 4);
+    const uint32_le raw_value = make_uint32_le(value);
+    return push_iat_data(buf, &raw_value, 4);
 }
 
 static size_t push_iat_byte(BUFFER *buf, uint8_t byte)
@@ -870,8 +876,8 @@ cleanup:
 static uint32_t add_mini_import_dir(BUFFER *output, uint32_t import_dir_rva, uint16_t pe_format)
 {
     static const char str_kernel32_dll[]     = "KERNEL32.dll";
-    static const char str_load_library_a[]   = "\0\0LoadLibraryA";
-    static const char str_get_proc_address[] = "\0\0GetProcAddress";
+    static const char str_load_library_a[]   = "LoadLibraryA";
+    static const char str_get_proc_address[] = "GetProcAddress";
 
     IMPORT_DIR_ENTRY *import_dir    = (IMPORT_DIR_ENTRY *)output->buf;
     uint32_le        *iat;
@@ -879,8 +885,8 @@ static uint32_t add_mini_import_dir(BUFFER *output, uint32_t import_dir_rva, uin
     const uint32_t    iat_size      = 3 * (pe_format == PE_FORMAT_PE32 ? 4 : 8);
     const uint32_t    kernel_offs   = iat_offs + iat_size;
     const uint32_t    load_lib_offs = kernel_offs + (uint32_t)sizeof(str_kernel32_dll);
-    const uint32_t    get_proc_offs = align_up(load_lib_offs + (uint32_t)sizeof(str_load_library_a), 2);
-    const uint32_t    total_size    = align_up(get_proc_offs + (uint32_t)sizeof(str_get_proc_address), 2);
+    const uint32_t    get_proc_offs = load_lib_offs + (uint32_t)sizeof(str_load_library_a);
+    const uint32_t    total_size    = get_proc_offs + (uint32_t)sizeof(str_get_proc_address);
 
     if (get_proc_offs + sizeof(str_get_proc_address) > output->size) {
         fprintf(stderr, "Error: Not enough buffer space for import address table\n");
@@ -898,13 +904,17 @@ static uint32_t add_mini_import_dir(BUFFER *output, uint32_t import_dir_rva, uin
 
     memset(iat, 0, iat_size);
 
+    /* Note: function strings are preceded by two bytes (uint16_t) which form
+     * a hint (ordinal) for the loader.  Thus we store offset (RVA) to the string
+     * minus 2.  We don't care about the actual value of the ordinal, it's just a hint.
+     */
     if (pe_format == PE_FORMAT_PE32) {
-        iat[0] = make_uint32_le(import_dir_rva + load_lib_offs);
-        iat[1] = make_uint32_le(import_dir_rva + get_proc_offs);
+        iat[0] = make_uint32_le(import_dir_rva + load_lib_offs - 2);
+        iat[1] = make_uint32_le(import_dir_rva + get_proc_offs - 2);
     }
     else {
-        iat[0] = make_uint32_le(import_dir_rva + load_lib_offs);
-        iat[2] = make_uint32_le(import_dir_rva + get_proc_offs);
+        iat[0] = make_uint32_le(import_dir_rva + load_lib_offs - 2);
+        iat[2] = make_uint32_le(import_dir_rva + get_proc_offs - 2);
     }
 
     /* Copy strings */
@@ -1021,14 +1031,14 @@ static int verify_compression(BUFFER   process_va,
                  comp_data.buf,    comp_data.size);
 
     if (memcmp(orig_lz77_data.buf, arith_output.buf, arith_output.size) != 0) {
-        fprintf(stderr, "Error: Arithmetic decoding verification failed\n");
+        fprintf(stderr, "Error: Arithmetic coding verification failed\n");
         return 1;
     }
 
     lz_decompress(decompressed.buf, decompressed.size, arith_output.buf);
 
     if (memcmp(process_va.buf + layout->decomp_base_rva, decompressed.buf, decompressed.size) != 0) {
-        fprintf(stderr, "Error: LZ77 decompression verification failed\n");
+        fprintf(stderr, "Error: LZ77 compression verification failed\n");
         return 1;
     }
 
@@ -1249,7 +1259,6 @@ BUFFER exe_pe(const void *buf, size_t size)
     section_header = (const SECTION_HEADER *)at_offset(buf, sect_offset);
 
     for (i = 0; i < num_sections; i++) {
-        char           name[9]        = { 0 };
         char           str_flags[128] = { 0 };
         const uint32_t section_va     = get_uint32_le(section_header[i].virtual_address);
         const uint32_t va_size        = get_uint32_le(section_header[i].virtual_size);
@@ -1262,8 +1271,7 @@ BUFFER exe_pe(const void *buf, size_t size)
         if (section_va + va_size > va_end)
             va_end = section_va + va_size;
 
-        memcpy(name, section_header[i].name, 8);
-        printf("section %s\n", name);
+        printf("section %.8s\n", section_header[i].name);
         printf("        pointer_to_raw_data      0x%x\n", get_uint32_le(section_header[i].pointer_to_raw_data));
         printf("        size_of_raw_data         0x%x\n", get_uint32_le(section_header[i].size_of_raw_data));
         printf("        virtual_address          0x%x\n", get_uint32_le(section_header[i].virtual_address));
@@ -1523,6 +1531,18 @@ BUFFER exe_pe(const void *buf, size_t size)
                    &layout,
                    layout.arith_decoder_rva + arith_decoder_offs,
                    opt_header);
+
+    printf("Compression stats:\n");
+    printf("        LIT                      %zu\n", compressed.stats_lit);
+    printf("        MATCH                    %zu\n", compressed.stats_match);
+    printf("        SHORTREP                 %zu\n", compressed.stats_shortrep);
+    printf("        LONGREP0                 %zu\n", compressed.stats_longrep[0]);
+    printf("        LONGREP1                 %zu\n", compressed.stats_longrep[1]);
+    printf("        LONGREP2                 %zu\n", compressed.stats_longrep[2]);
+    printf("        LONGREP3                 %zu\n", compressed.stats_longrep[3]);
+    printf("        Original data            %u\n",  layout.lz77_data_rva - va_start);
+    printf("        LZ77 compressed          %zu\n", compressed.lz);
+    printf("        Arith encoded            %zu\n", compressed.compressed);
 
     printf("Wasted %u bytes in the header\n", new_header_size - (uint32_t)header_data.size);
 
