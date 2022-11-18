@@ -56,13 +56,16 @@
  * arith_decoder_rva --> +----------------+ <- Arithmetic decoder is stored here;
  *                       |   arithmetic   |    this rva is also the new entry_point_rva;
  *                       |    decoder     |    address NOT aligned on 4K
+ * live_layout_rva ----> +----------------+ <- Live layout structure used by loaders; address NOT
+ *                       |  live layout   |    aligned on 4K
+ * import_str_rva -----> +----------------+ <- Imported strings; address NOT aligned on 4K
+ *                       |     strings    |
+ * mini_iat_rva -------> +----------------+ <- Import Address Table loaded by the OS, which is used
+ *                       |   mini iat     |    by the import loader; address NOT aligned on 4K
  * import_dir_rva -----> +----------------+ <- Used to load this by Windows; address NOT aligned on 4K
  *                       |  mini import   |
  *                       |   directory    |
- * mini_iat_rva -------> +----------------+ <- Import Address Table loaded by the OS, which is used
- *                       |   mini iat     |    by the import loader; address NOT aligned on 4K
- * live_layout_rva ----> +----------------+ <- Live layout structure used by loaders; address NOT
- *                       |  live layout   |    aligned on 4K
+ * trailing_zero_rva --> +----------------+ <- Offset of first trailing zero (NOT aligned on 4K)
  * end_rva ------------> +----------------+ <- End of used address space; address NOT aligned on 4K
  */
 
@@ -75,9 +78,11 @@ typedef struct {
     uint32_t lz77_decompressor_rva;
     uint32_t comp_data_rva;
     uint32_t arith_decoder_rva;
-    uint32_t import_dir_rva;
-    uint32_t mini_iat_rva;
     uint32_t live_layout_rva;
+    uint32_t import_str_rva;
+    uint32_t mini_iat_rva;
+    uint32_t import_dir_rva;
+    uint32_t trailing_zero_rva;
     uint32_t end_rva;
 } LAYOUT;
 
@@ -533,7 +538,7 @@ static void fill_pe_header(BUFFER             process_va,
     section_header[1].virtual_address     = make_uint32_le(layout->comp_data_rva);
     section_header[1].virtual_size        = make_uint32_le(aligned_end - layout->comp_data_rva);
     section_header[1].flags               = make_uint32_le(SECTION_CNT_INITIALIZED_DATA | sec_flags);
-    section_header[1].size_of_raw_data    = make_uint32_le(layout->end_rva - layout->comp_data_rva);
+    section_header[1].size_of_raw_data    = make_uint32_le(layout->trailing_zero_rva - layout->comp_data_rva);
     section_header[1].pointer_to_raw_data = make_uint32_le(new_header_size);
 }
 
@@ -873,36 +878,44 @@ cleanup:
     return entry_point_offs;
 }
 
-static uint32_t add_mini_import_dir(BUFFER *output, uint32_t import_dir_rva, uint16_t pe_format)
+static BUFFER add_mini_import_dir(BUFFER    output,
+                                  uint32_t  import_dir_rva,
+                                  uint16_t  pe_format,
+                                  uint32_t *out_import_table_offs,
+                                  uint32_t *out_iat_offs)
 {
     static const char str_kernel32_dll[]     = "KERNEL32.dll";
     static const char str_load_library_a[]   = "LoadLibraryA";
     static const char str_get_proc_address[] = "GetProcAddress";
 
-    IMPORT_DIR_ENTRY *import_dir    = (IMPORT_DIR_ENTRY *)output->buf;
-    uint32_le        *iat;
-    const uint32_t    iat_offs      = 2 * (uint32_t)sizeof(IMPORT_DIR_ENTRY);
-    const uint32_t    iat_size      = 3 * (pe_format == PE_FORMAT_PE32 ? 4 : 8);
-    const uint32_t    kernel_offs   = iat_offs + iat_size;
+    const uint32_t    kernel_offs   = 0;
     const uint32_t    load_lib_offs = kernel_offs + (uint32_t)sizeof(str_kernel32_dll);
     const uint32_t    get_proc_offs = load_lib_offs + (uint32_t)sizeof(str_load_library_a);
-    const uint32_t    total_size    = get_proc_offs + (uint32_t)sizeof(str_get_proc_address);
+    const uint32_t    iat_offs      = get_proc_offs + (uint32_t)sizeof(str_get_proc_address);
+    const uint32_t    iat_size      = 3 * (pe_format == PE_FORMAT_PE32 ? 4 : 8);
+    const uint32_t    dir_offs      = iat_offs + iat_size;
+    const uint32_t    dir_size      = 2 * (uint32_t)sizeof(IMPORT_DIR_ENTRY);
+    const uint32_t    total_size    = dir_offs + dir_size;
+    IMPORT_DIR_ENTRY *import_dir;
+    uint32_le        *iat;
 
-    if (get_proc_offs + sizeof(str_get_proc_address) > output->size) {
+    if (total_size > output.size) {
+        BUFFER empty = { NULL, 0 };
+
         fprintf(stderr, "Error: Not enough buffer space for import address table\n");
-        return 0;
+        return empty;
     }
 
-    /* Fill import directory entry */
-    memset(import_dir, 0, total_size);
+    memset(output.buf, 0, total_size);
 
-    import_dir->name_rva = make_uint32_le(import_dir_rva + kernel_offs);
+    /* Fill import directory entry */
+    import_dir = (IMPORT_DIR_ENTRY *)buf_at_offset(output, dir_offs, dir_size);
+
+    import_dir->name_rva                 = make_uint32_le(import_dir_rva + kernel_offs);
     import_dir->import_address_table_rva = make_uint32_le(import_dir_rva + iat_offs);
 
     /* Fill import address table */
-    iat = (uint32_le *)buf_at_offset(*output, iat_offs, iat_size);
-
-    memset(iat, 0, iat_size);
+    iat = (uint32_le *)buf_at_offset(output, iat_offs, iat_size);
 
     /* Note: function strings are preceded by two bytes (uint16_t) which form
      * a hint (ordinal) for the loader.  Thus we store offset (RVA) to the string
@@ -918,15 +931,14 @@ static uint32_t add_mini_import_dir(BUFFER *output, uint32_t import_dir_rva, uin
     }
 
     /* Copy strings */
-    memcpy(buf_at_offset(*output, kernel_offs,   sizeof(str_kernel32_dll)),     str_kernel32_dll,     sizeof(str_kernel32_dll));
-    memcpy(buf_at_offset(*output, load_lib_offs, sizeof(str_load_library_a)),   str_load_library_a,   sizeof(str_load_library_a));
-    memcpy(buf_at_offset(*output, get_proc_offs, sizeof(str_get_proc_address)), str_get_proc_address, sizeof(str_get_proc_address));
+    memcpy(buf_at_offset(output, kernel_offs,   sizeof(str_kernel32_dll)),     str_kernel32_dll,     sizeof(str_kernel32_dll));
+    memcpy(buf_at_offset(output, load_lib_offs, sizeof(str_load_library_a)),   str_load_library_a,   sizeof(str_load_library_a));
+    memcpy(buf_at_offset(output, get_proc_offs, sizeof(str_get_proc_address)), str_get_proc_address, sizeof(str_get_proc_address));
 
-    /* Update buffer size */
-    output->size = total_size;
+    *out_import_table_offs = dir_offs;
+    *out_iat_offs          = iat_offs;
 
-    /* Return just the import table size */
-    return iat_offs;
+    return buf_truncate(output, total_size);
 }
 
 typedef struct {
@@ -955,22 +967,36 @@ typedef struct {
     uint32_le comp_data_size;
 } FINAL_LAYOUT_64;
 
-static int add_live_layout(BUFFER   output,
-                           LAYOUT  *layout,
-                           uint32_t entry_point,
-                           uint16_t pe_format,
-                           uint32_t import_loader_offs,
-                           uint32_t lz77_decomp_offs,
-                           uint32_t lz77_data_size,
-                           uint32_t comp_data_size)
+static BUFFER make_room_for_live_layout(BUFFER   output,
+                                        LAYOUT  *layout,
+                                        uint16_t pe_format)
 {
     if (sizeof(FINAL_LAYOUT_64) > output.size) {
+        BUFFER empty = { NULL, 0 };
+
         fprintf(stderr, "Error: Not enough buffer space to store live layout\n");
-        return 1;
+        return empty;
     }
 
+    if (pe_format == PE_FORMAT_PE32)
+        return buf_truncate(output, sizeof(FINAL_LAYOUT_32));
+    else
+        return buf_truncate(output, sizeof(FINAL_LAYOUT_64));
+}
+
+static void fill_live_layout(BUFFER   output,
+                             LAYOUT  *layout,
+                             uint32_t entry_point,
+                             uint16_t pe_format,
+                             uint32_t import_loader_offs,
+                             uint32_t lz77_decomp_offs,
+                             uint32_t lz77_data_size,
+                             uint32_t comp_data_size)
+{
     if (pe_format == PE_FORMAT_PE32) {
         FINAL_LAYOUT_32 *final_layout = (FINAL_LAYOUT_32 *)output.buf;
+
+        assert(sizeof(FINAL_LAYOUT_32) == output.size);
 
         final_layout->decomp_base    = make_uint32_le((uint32_t)layout->image_base + layout->decomp_base_rva);
         final_layout->entry_point    = make_uint32_le((uint32_t)layout->image_base + entry_point);
@@ -982,11 +1008,11 @@ static int add_live_layout(BUFFER   output,
         final_layout->mini_iat       = make_uint32_le((uint32_t)layout->image_base + layout->mini_iat_rva);
         final_layout->lz77_data_size = make_uint32_le(lz77_data_size);
         final_layout->comp_data_size = make_uint32_le(comp_data_size);
-
-        layout->end_rva = layout->live_layout_rva + (uint32_t)sizeof(FINAL_LAYOUT_32);
     }
     else {
         FINAL_LAYOUT_64 *final_layout = (FINAL_LAYOUT_64 *)output.buf;
+
+        assert(sizeof(FINAL_LAYOUT_64) == output.size);
 
         final_layout->decomp_base    = make_uint64_le(layout->image_base + layout->decomp_base_rva);
         final_layout->entry_point    = make_uint64_le(layout->image_base + entry_point);
@@ -998,11 +1024,7 @@ static int add_live_layout(BUFFER   output,
         final_layout->mini_iat       = make_uint64_le(layout->image_base + layout->mini_iat_rva);
         final_layout->lz77_data_size = make_uint32_le(lz77_data_size);
         final_layout->comp_data_size = make_uint32_le(comp_data_size);
-
-        layout->end_rva = layout->live_layout_rva + (uint32_t)sizeof(FINAL_LAYOUT_64);
     }
-
-    return 0;
 }
 
 static int verify_compression(BUFFER   process_va,
@@ -1076,7 +1098,7 @@ static void patch_32bit_arith_decoder(BUFFER buf, const LAYOUT *layout)
     }
 }
 
-static int patch_live_layout(BUFFER buf, uint16_t pe_format, const LAYOUT *layout)
+static int install_live_layout(BUFFER buf, uint16_t pe_format, const LAYOUT *layout)
 {
     static const uint8_t signature[] = { 0x0D, 0xF0, 0xEF, 0xBE, 0xFE, 0xCA, 0xCE, 0xFA };
     const size_t         sig_size    = (pe_format == PE_FORMAT_PE32) ? 4 : 8;
@@ -1129,7 +1151,8 @@ BUFFER exe_pe(const void *buf, size_t size)
     BUFFER                lz77_decomp    = { NULL, 0 };
     BUFFER                comp_data      = { NULL, 0 };
     BUFFER                arith_decoder  = { NULL, 0 };
-    BUFFER                header_data    = { NULL, 0 }; /* Put some data in the headers, which are loaded at image_base */
+    BUFFER                header_data    = { NULL, 0 };
+    BUFFER                live_layout    = { NULL, 0 };
     uint32_t              machine;
     uint32_t              dir_size;
     const uint32_t        pe_offset      = get_pe_offset(buf, size);
@@ -1493,38 +1516,50 @@ BUFFER exe_pe(const void *buf, size_t size)
     if (arith_decoder_offs == ~0U)
         goto cleanup;
 
-    output                = buf_get_tail(output, arith_decoder.size);
-    layout.import_dir_rva = layout.arith_decoder_rva + (uint32_t)arith_decoder.size;
+    output                 = buf_get_tail(output, arith_decoder.size);
+    layout.live_layout_rva = layout.arith_decoder_rva + (uint32_t)arith_decoder.size;
+
+    /* Make room for live layout (filled later) */
+    live_layout = make_room_for_live_layout(output, &layout, pe_format);
+    if ( ! live_layout.buf)
+        goto cleanup;
+
+    output                = buf_get_tail(output, live_layout.size);
+    layout.import_str_rva = layout.live_layout_rva + (uint32_t)live_layout.size;
 
     /* Add import directory */
     {
         BUFFER   import_dir;
-        uint32_t import_dir_size;
+        uint32_t import_table_offs;
+        uint32_t iat_offs;
 
-        import_dir = output;
-        import_dir_size = add_mini_import_dir(&import_dir, layout.import_dir_rva, pe_format);
-        if ( ! import_dir_size)
+        import_dir = add_mini_import_dir(output, layout.import_dir_rva, pe_format,
+                                         &import_table_offs, &iat_offs);
+        if ( ! import_dir.buf)
             goto cleanup;
 
         output = buf_get_tail(output, import_dir.size);
-        layout.live_layout_rva = layout.import_dir_rva + (uint32_t)import_dir.size;
-        layout.mini_iat_rva    = layout.import_dir_rva + import_dir_size;
+        layout.mini_iat_rva   = layout.import_str_rva + iat_offs;
+        layout.import_dir_rva = layout.import_str_rva + import_table_offs;
+        layout.end_rva        = layout.import_str_rva + (uint32_t)import_dir.size;
+
+        layout.trailing_zero_rva = layout.end_rva;
+        while (process_va.buf[layout.trailing_zero_rva - 1] == 0)
+            --layout.trailing_zero_rva;
     }
 
     /* Add layout which is used by the loaders */
-    if (add_live_layout(output,
-                        &layout,
-                        get_uint32_le(opt_header->entry_point),
-                        pe_format,
-                        import_loader_offs,
-                        lz77_decomp_offs,
-                        lz77_data_size,
-                        (uint32_t)compressed.compressed))
-        goto cleanup;
-    output = buf_get_tail(output, layout.end_rva - layout.live_layout_rva);
+    fill_live_layout(live_layout,
+                     &layout,
+                     get_uint32_le(opt_header->entry_point),
+                     pe_format,
+                     import_loader_offs,
+                     lz77_decomp_offs,
+                     lz77_data_size,
+                     (uint32_t)compressed.compressed);
 
     /* Patch arithmetic decoder to locate live layout */
-    if (patch_live_layout(arith_decoder, pe_format, &layout))
+    if (install_live_layout(arith_decoder, pe_format, &layout))
         goto cleanup;
 
     fill_pe_header(process_va,
@@ -1554,10 +1589,11 @@ BUFFER exe_pe(const void *buf, size_t size)
     printf("        lz77 data rva            0x%x (%u bytes)\n", layout.lz77_data_rva,         layout.lz77_decompressor_rva - layout.lz77_data_rva);
     printf("        lz77 decompressor rva    0x%x (%u bytes)\n", layout.lz77_decompressor_rva, lz77_data_size - (layout.lz77_decompressor_rva - layout.lz77_data_rva));
     printf("        comp data rva            0x%x (%u bytes)\n", layout.comp_data_rva,         layout.arith_decoder_rva - layout.comp_data_rva);
-    printf("        arith decoder rva        0x%x (%u bytes)\n", layout.arith_decoder_rva,     layout.import_dir_rva - layout.arith_decoder_rva);
-    printf("        import dir rva           0x%x (%u bytes)\n", layout.import_dir_rva,        layout.mini_iat_rva - layout.import_dir_rva);
-    printf("        mini iat rva             0x%x (%u bytes)\n", layout.mini_iat_rva,          layout.live_layout_rva - layout.mini_iat_rva);
-    printf("        live layout rva          0x%x (%u bytes)\n", layout.live_layout_rva,       layout.end_rva - layout.live_layout_rva);
+    printf("        arith decoder rva        0x%x (%u bytes)\n", layout.arith_decoder_rva,     layout.live_layout_rva - layout.arith_decoder_rva);
+    printf("        live layout rva          0x%x (%u bytes)\n", layout.live_layout_rva,       layout.import_str_rva - layout.live_layout_rva);
+    printf("        import str rva           0x%x (%u bytes)\n", layout.import_str_rva,        layout.mini_iat_rva - layout.import_str_rva);
+    printf("        mini iat rva             0x%x (%u bytes)\n", layout.mini_iat_rva,          layout.import_dir_rva - layout.mini_iat_rva);
+    printf("        import dir rva           0x%x (%u bytes)\n", layout.import_dir_rva,        layout.end_rva - layout.import_dir_rva);
     printf("        end rva                  0x%x\n",            layout.end_rva);
 
     /* Verify compression */
@@ -1570,7 +1606,7 @@ BUFFER exe_pe(const void *buf, size_t size)
            comp_data.buf,
            layout.end_rva - layout.comp_data_rva);
 
-    output.size = new_header_size + (layout.end_rva - layout.comp_data_rva);
+    output.size = new_header_size + (layout.trailing_zero_rva - layout.comp_data_rva);
 
     error = 0;
 
