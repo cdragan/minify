@@ -184,6 +184,8 @@ ifeq ($(UNAME), Darwin)
 
         LTO_CFLAGS += -flto
         LDFLAGS    += -flto
+    else
+        export MallocNanoZone=0
     endif
     STUB_CFLAGS  += -flto
     STUB_LDFLAGS += -flto
@@ -273,7 +275,7 @@ test: $(tests)
 
 define RUN_TEST
 $1: $$(call CMDLINE_PATH,$1)
-	MallocNanoZone=0 $$<
+	$$<
 endef
 
 $(foreach test, $(tests), $(eval $(call RUN_TEST,$(test))))
