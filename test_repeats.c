@@ -225,6 +225,20 @@ int main(void)
         RUN_TEST("dexabc abcdeyabc", expect);
     }
 
+    /* Use shortreps */
+    {
+        static EXPECT expect[] = {
+            { w_literal, 0, 1,  0 },
+            { w_MATCH,   1, 2,  1 },
+            { w_literal, 3, 1,  0 },
+            { w_MATCH,   4, 1,  1 },
+            { w_literal, 5, 1,  0 },
+            { w_MATCH,   6, 1,  1 },
+            { w_end,     0, 0,  0 }
+        };
+        RUN_TEST("aaabbcc", expect);
+    }
+
     if (num_failed)
         fprintf(stderr, "test_repeats.c: failed %u tests\n", num_failed);
 
