@@ -133,6 +133,22 @@ static void set_offset(const uint8_t *buf, size_t pos, OFFSET_MAP *map)
     map->pair_ids[idx] = new_id;
 }
 
+/* Append distance to the list of last 4 distances, without duplicates */
+static void update_last4(uint32_t last_dist[], uint32_t distance)
+{
+    int i;
+
+    for (i = 0; i < 3; i++) {
+        if (last_dist[i] == distance)
+            break;
+    }
+
+    for (; i > 0; i--)
+        last_dist[i] = last_dist[i - 1];
+
+    last_dist[0] = distance;
+}
+
 static uint32_t compare(const uint8_t *buf, size_t left_pos, size_t right_pos, size_t size)
 {
     const uint8_t *left      = &buf[left_pos];
@@ -425,7 +441,7 @@ int find_repeats(const uint8_t *buf,
     /* Find subsequent matches as long as we have at least two consecutive bytes */
     while (pos + 1 < size) {
         OCCURRENCE occurrence = find_longest_occurrence(buf, pos, size, last_dist, map);
-        size_t     i;
+        uint32_t   i;
 
         if ( ! occurrence.length) {
             set_offset(buf, pos, map);
@@ -465,14 +481,7 @@ int find_repeats(const uint8_t *buf,
 
         report_match(cookie, buf, pos, occurrence);
 
-        /* Append distance to the list of last 4 distances, without duplicates */
-        for (i = 0; i < 3; i++) {
-            if (last_dist[i] == occurrence.distance)
-                break;
-        }
-        for (; i > 0; i--)
-            last_dist[i] = last_dist[i - 1];
-        last_dist[0]    = occurrence.distance;
+        update_last4(last_dist, occurrence.distance);
         occurrence.last = 0;
 
         /* Update lookup table with byte pair at every position */
