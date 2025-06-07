@@ -9,7 +9,7 @@
 
 typedef struct {
     uint32_t prob[2];
-    uint64_t history;
+    uint32_t history[2];
 } MODEL;
 
 void init_model(MODEL *model);

@@ -10,20 +10,35 @@
 
 void init_model(MODEL *model)
 {
-    model->prob[0] = 33;
-    model->prob[1] = 33;
-    model->history = 0xAAAAAAAAAAAAAAAAULL;
+    const uint32_t hist_buckets = (uint32_t)(sizeof(model->history) / sizeof(model->history[0]));
+    uint32_t       i;
+
+    model->prob[0] = hist_buckets * 16 + 1;
+    model->prob[1] = hist_buckets * 16 + 1;
+
+    for (i = 0; i < hist_buckets; i++)
+        model->history[i] = 0xAAAAAAAAULL;
 }
 
 void update_model(MODEL *model, uint32_t bit)
 {
+    const uint32_t hist_buckets = (uint32_t)(sizeof(model->history) / sizeof(model->history[0]));
+    uint32_t       i;
+
     assert(bit <= 1);
 
     ++model->prob[bit];
 
-    --model->prob[model->history >> 63];
+    for (i = 0; i < hist_buckets; i++) {
 
-    model->history = (model->history << 1) | bit;
+        const uint32_t old_bit = model->history[i] >> 31;
+
+        model->history[i] = (model->history[i] << 1) | bit;
+
+        bit = old_bit;
+    }
+
+    --model->prob[bit];
 }
 
 typedef struct {
