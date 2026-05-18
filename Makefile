@@ -71,7 +71,7 @@ endif
 # Default build flags
 
 # Debug vs release
-debug ?= 0
+release ?= 0
 
 ##############################################################################
 # Compiler flags
@@ -79,7 +79,7 @@ debug ?= 0
 ifeq ($(UNAME), Windows)
     WFLAGS += -W3
 
-    ifeq ($(debug), 0)
+    ifeq ($(release), 1)
         CFLAGS  += -O2 -Oi -DNDEBUG -MT
         ifneq ($(CC), clang-cl.exe)
             CFLAGS += -GL
@@ -129,18 +129,18 @@ else
     CFLAGS += -fPIC
     CFLAGS += -MD
 
-    ifeq ($(debug), 0)
+    ifeq ($(release), 1)
         CFLAGS += -DNDEBUG -O3
         CFLAGS += -fomit-frame-pointer
         CFLAGS += -fno-stack-check -fno-stack-protector
-	# For C++:
-	#CFLAGS += -fno-threadsafe-statics
+        # For C++:
+        #CFLAGS += -fno-threadsafe-statics
 
         CFLAGS  += -ffunction-sections -fdata-sections
         LDFLAGS += -ffunction-sections -fdata-sections
     else
-        CFLAGS  += -fsanitize=address
-        LDFLAGS += -fsanitize=address
+        CFLAGS  += -fsanitize=address,undefined
+        LDFLAGS += -fsanitize=address,undefined
 
         CFLAGS += -O0 -g
     endif
@@ -163,7 +163,7 @@ else
 endif
 
 ifeq ($(UNAME), Linux)
-    ifeq ($(debug), 0)
+    ifeq ($(release), 1)
         STRIP = strip
 
         LDFLAGS += -Wl,--gc-sections -Wl,--as-needed
@@ -177,7 +177,7 @@ ifeq ($(UNAME), Linux)
 endif
 
 ifeq ($(UNAME), Darwin)
-    ifeq ($(debug), 0)
+    ifeq ($(release), 1)
         STRIP = strip -x
 
         LDFLAGS += -Wl,-dead_strip
@@ -199,7 +199,7 @@ endif
 
 out_dir_base ?= Out
 
-ifeq ($(debug), 0)
+ifeq ($(release), 1)
     out_dir_config = release
 else
     out_dir_config = debug
@@ -231,16 +231,16 @@ CMDLINE_PATH = $(out_dir)/$1$(exe_suffix)
 ##############################################################################
 # Rules
 
-default: $(foreach target, $(targets), $(call CMDLINE_PATH,$(target)))
+default: test
 
-.PHONY: default
+build: $(foreach target, $(targets), $(call CMDLINE_PATH,$(target)))
 
-all: default $(foreach test, $(tests), $(call CMDLINE_PATH,$(test)))
+build_all: default $(foreach test, $(tests), $(call CMDLINE_PATH,$(test)))
 
 clean:
 	rm -rf $(out_dir)
 
-.PHONY: clean
+.PHONY: build default build_all clean
 
 $(out_dir_base):
 	mkdir -p $@

@@ -18,6 +18,6 @@ echo "Using $JOBS jobs"
 
 rm -rf Out
 
-make -j $JOBS -k
+make -j $JOBS release=1 -k
 
-make -j $JOBS debug=1 -k test
+make -j $JOBS release=0 -k
