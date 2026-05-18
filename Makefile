@@ -234,7 +234,7 @@ CMDLINE_PATH = $(out_dir)/$1$(exe_suffix)
 ##############################################################################
 # Rules
 
-default: test
+default: build test
 
 build: $(foreach target, $(targets), $(call CMDLINE_PATH,$(target)))
 
