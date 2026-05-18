@@ -3,7 +3,7 @@
  */
 
 #include "arith_encode.h"
-#include "arith_decode.h"
+#include "arith_model.h"
 #include "bit_emit.h"
 #include "bit_stream.h"
 

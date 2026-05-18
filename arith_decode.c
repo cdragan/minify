@@ -3,6 +3,7 @@
  */
 
 #include "arith_decode.h"
+#include "arith_model.h"
 #include "bit_stream.h"
 
 #include <assert.h>
