@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT
- * Copyright (c) 2022 Chris Dragan
+ * Copyright (c) 2026 Chris Dragan
  */
 
 #include "lza_compress.h"
