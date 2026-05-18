@@ -19,6 +19,7 @@ typedef struct {
     size_t    pos;
     size_t    size;
     size_t    distance;
+    int       last;
 } EXPECT;
 
 typedef struct {
@@ -40,7 +41,7 @@ static const char *what_str(enum WHAT what)
     return "unknown";
 }
 
-static void test_report(void *cookie, enum WHAT what, size_t pos, size_t size, size_t distance)
+static void test_report(void *cookie, enum WHAT what, size_t pos, size_t size, size_t distance, int last)
 {
     TEST_CASE *test_case = (TEST_CASE *)cookie;
     EXPECT    *expect    = test_case->expect;
@@ -80,17 +81,24 @@ static void test_report(void *cookie, enum WHAT what, size_t pos, size_t size, s
         return;
     }
 
+    if (what == w_MATCH && expect->last != last) {
+        fprintf(stderr, "test_repeats.c:%d: expected last %d but got %d\n",
+                test_case->line, expect->last, last);
+        test_case->expect = NULL;
+        return;
+    }
+
     ++test_case->expect;
 }
 
 static void report_literal(void *cookie, const uint8_t *buf, size_t pos, size_t size)
 {
-    test_report(cookie, w_literal, pos, size, 0);
+    test_report(cookie, w_literal, pos, size, 0, -1);
 }
 
 static void report_match(void *cookie, const uint8_t *buf, size_t pos, OCCURRENCE occurrence)
 {
-    test_report(cookie, w_MATCH, pos, occurrence.length, occurrence.distance);
+    test_report(cookie, w_MATCH, pos, occurrence.length, occurrence.distance, occurrence.last);
 }
 
 static unsigned run_test(const uint8_t *buf, size_t size, int line, EXPECT *expect)
@@ -131,7 +139,7 @@ int main(void)
     /* Empty buffer */
     {
         static EXPECT expect[] = {
-            { w_end, 0, 0, 0 }
+            { w_end, 0, 0, 0, -1 }
         };
         RUN_TEST("", expect);
     }
@@ -139,8 +147,8 @@ int main(void)
     /* One byte */
     {
         static EXPECT expect[] = {
-            { w_literal, 0, 1, 0 },
-            { w_end,     0, 0, 0 }
+            { w_literal, 0, 1, 0, -1 },
+            { w_end,     0, 0, 0, -1 }
         };
         RUN_TEST("a", expect);
     }
@@ -148,8 +156,8 @@ int main(void)
     /* Three literal bytes */
     {
         static EXPECT expect[] = {
-            { w_literal, 0, 3, 0 },
-            { w_end,     0, 0, 0 }
+            { w_literal, 0, 3, 0, -1 },
+            { w_end,     0, 0, 0, -1 }
         };
         RUN_TEST("abc", expect);
     }
@@ -157,10 +165,10 @@ int main(void)
     /* Repetition of size 1 */
     {
         static EXPECT expect[] = {
-            { w_literal, 0, 2, 0 },
-            { w_MATCH,   2, 3, 1 },
-            { w_literal, 5, 1, 0 },
-            { w_end,     0, 0, 0 }
+            { w_literal, 0, 2, 0, -1 },
+            { w_MATCH,   2, 3, 1, -1 },
+            { w_literal, 5, 1, 0, -1 },
+            { w_end,     0, 0, 0, -1 }
         };
         RUN_TEST("abbbbc", expect);
     }
@@ -168,9 +176,9 @@ int main(void)
     /* Repetition of size 2 */
     {
         static EXPECT expect[] = {
-            { w_literal, 0, 3, 0 },
-            { w_MATCH,   3, 2, 2 },
-            { w_end,     0, 0, 0 }
+            { w_literal, 0, 3, 0, -1 },
+            { w_MATCH,   3, 2, 2, -1 },
+            { w_end,     0, 0, 0, -1 }
         };
         RUN_TEST("abcbc", expect);
     }
@@ -178,13 +186,13 @@ int main(void)
     /* Use longest repetition */
     {
         static EXPECT expect[] = {
-            { w_literal,  0, 5,  0 },
-            { w_MATCH,    5, 2,  3 },
-            { w_literal,  7, 1,  0 },
-            { w_MATCH,    8, 2,  7 },
-            { w_literal, 10, 1,  0 },
-            { w_MATCH,   11, 3, 10 },
-            { w_end,      0, 0,  0 }
+            { w_literal,  0, 5,  0, -1 },
+            { w_MATCH,    5, 2,  3, -1 },
+            { w_literal,  7, 1,  0, -1 },
+            { w_MATCH,    8, 2,  7, -1 },
+            { w_literal, 10, 1,  0, -1 },
+            { w_MATCH,   11, 3, 10, -1 },
+            { w_end,      0, 0,  0, -1 }
         };
         RUN_TEST("0bcd1cd2bc3bcd", expect);
     }
@@ -192,11 +200,11 @@ int main(void)
     /* Use longest repetition */
     {
         static EXPECT expect[] = {
-            { w_literal, 0, 4, 0 },
-            { w_MATCH,   4, 2, 3 },
-            { w_literal, 6, 2, 0 },
-            { w_MATCH,   8, 3, 4 },
-            { w_end,     0, 0, 0 }
+            { w_literal, 0, 4, 0, -1 },
+            { w_MATCH,   4, 2, 3, -1 },
+            { w_literal, 6, 2, 0, -1 },
+            { w_MATCH,   8, 3, 4, -1 },
+            { w_end,     0, 0, 0, -1 }
         };
         RUN_TEST("0bc1bcd2bcd", expect);
     }
@@ -204,39 +212,62 @@ int main(void)
     /* Prefer smallest distance */
     {
         static EXPECT expect[] = {
-            { w_literal, 0, 4, 0 },
-            { w_MATCH,   4, 3, 4 },
-            { w_MATCH,   7, 3, 3 },
-            { w_end,     0, 0, 0 }
+            { w_literal, 0, 4, 0, -1 },
+            { w_MATCH,   4, 3, 4, -1 },
+            { w_MATCH,   7, 3, 3, -1 },
+            { w_end,     0, 0, 0, -1 }
         };
         RUN_TEST("abc abcabc", expect);
     }
 
-    /* Prefer same distance as last time */
+    /* Prefer same distance as last time (LONGREP0 at pos 13) */
     {
         static EXPECT expect[] = {
-            { w_literal,  0, 7,  0 },
-            { w_MATCH,    7, 3,  4 },
-            { w_MATCH,   10, 2, 10 },
-            { w_literal, 12, 1,  0 },
-            { w_MATCH,   13, 3, 10 },
-            { w_end,      0, 0,  0 }
+            { w_literal,  0, 7,  0, -1 },
+            { w_MATCH,    7, 3,  4, -1 },
+            { w_MATCH,   10, 2, 10, -1 },
+            { w_literal, 12, 1,  0, -1 },
+            { w_MATCH,   13, 3, 10,  0 },
+            { w_end,      0, 0,  0, -1 }
         };
         RUN_TEST("dexabc abcdeyabc", expect);
     }
 
-    /* Use shortreps */
+    /* Use shortreps (length 1 with last == 0) */
     {
         static EXPECT expect[] = {
-            { w_literal, 0, 1,  0 },
-            { w_MATCH,   1, 2,  1 },
-            { w_literal, 3, 1,  0 },
-            { w_MATCH,   4, 1,  1 },
-            { w_literal, 5, 1,  0 },
-            { w_MATCH,   6, 1,  1 },
-            { w_end,     0, 0,  0 }
+            { w_literal, 0, 1,  0, -1 },
+            { w_MATCH,   1, 2,  1, -1 },
+            { w_literal, 3, 1,  0, -1 },
+            { w_MATCH,   4, 1,  1,  0 },
+            { w_literal, 5, 1,  0, -1 },
+            { w_MATCH,   6, 1,  1,  0 },
+            { w_end,     0, 0,  0, -1 }
         };
         RUN_TEST("aaabbcc", expect);
+    }
+
+    /* LONGREP0 with length > 1 */
+    {
+        static EXPECT expect[] = {
+            { w_literal,  0, 6, 0, -1 },
+            { w_MATCH,    6, 4, 6, -1 },
+            { w_literal, 10, 2, 0, -1 },
+            { w_MATCH,   12, 4, 6,  0 },
+            { w_end,      0, 0, 0, -1 }
+        };
+        RUN_TEST("abcdXXabcdYYabcd", expect);
+    }
+
+    /* Long distance-1 run (covers the 8-byte qword fast path) */
+    {
+        static EXPECT expect[] = {
+            { w_literal,  0,  2,  0, -1 },
+            { w_MATCH,    2, 10,  1, -1 },
+            { w_literal, 12,  1,  0, -1 },
+            { w_end,      0,  0,  0, -1 }
+        };
+        RUN_TEST("Xaaaaaaaaaaab", expect);
     }
 
     if (num_failed)
