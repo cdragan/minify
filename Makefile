@@ -97,6 +97,7 @@ ifeq ($(UNAME), Windows)
 
     LDFLAGS += -nologo
     LDFLAGS += user32.lib kernel32.lib ole32.lib
+    LDFLAGS += -map:$(basename $@).map
 
     CC   = cl.exe
     LINK = link.exe
@@ -171,6 +172,7 @@ ifeq ($(UNAME), Linux)
         LTO_CFLAGS += -flto -fno-fat-lto-objects
         LDFLAGS    += -flto=auto -fuse-linker-plugin
     endif
+    LDFLAGS      += -Wl,-Map=$(basename $@).map
     STUB_LDFLAGS += -Wl,--gc-sections -Wl,--as-needed
     STUB_STRIP = strip
     DISASM_COMMAND = objdump -d -M intel $2 > $1
@@ -187,6 +189,7 @@ ifeq ($(UNAME), Darwin)
     else
         export MallocNanoZone=0
     endif
+    LDFLAGS      += -Wl,-map,$(basename $@).map
     STUB_CFLAGS  += -flto
     STUB_LDFLAGS += -flto
     STUB_LDFLAGS += -Wl,-dead_strip
