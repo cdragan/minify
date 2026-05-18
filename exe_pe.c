@@ -8,6 +8,7 @@
 #include "load_file.h"
 #include "lza_decompress.h"
 #include "lza_compress.h"
+#include "static_assert.h"
 
 #include <assert.h>
 #define __STDC_FORMAT_MACROS
@@ -972,6 +973,9 @@ typedef struct {
     uint32_le lz77_data_size;
     uint32_le comp_data_size;
 } FINAL_LAYOUT_64;
+
+STATIC_ASSERT(sizeof(FINAL_LAYOUT_32) == 40, "FINAL_LAYOUT_32 has unexpected padding");
+STATIC_ASSERT(sizeof(FINAL_LAYOUT_64) == 72, "FINAL_LAYOUT_64 has unexpected padding");
 
 static BUFFER make_room_for_live_layout(BUFFER   output,
                                         LAYOUT  *layout,

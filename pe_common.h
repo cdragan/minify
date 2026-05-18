@@ -2,6 +2,8 @@
  * Copyright (c) 2026 Chris Dragan
  */
 
+#include "static_assert.h"
+
 #include <stdint.h>
 
 #ifdef _WIN32
@@ -40,3 +42,6 @@ struct LIVE_LAYOUT_STRUCT {
     uint32_t       lz77_data_size;
     uint32_t       comp_data_size;
 };
+
+STATIC_ASSERT(sizeof(LIVE_LAYOUT) == 8 * sizeof(void *) + 8,
+              "LIVE_LAYOUT layout changed; keep FINAL_LAYOUT_32/_64 in exe_pe.c in sync");
