@@ -166,7 +166,8 @@ static uint64_le make_uint64_le(uint64_t value)
 
 static uint32_t align_up(uint32_t value, uint32_t align)
 {
-    return ((value - 1) / align + 1) * align;
+    assert(align > 0 && (align & (align - 1)) == 0);
+    return (value + align - 1) & ~(align - 1);
 }
 
 /* Structures representing various data structures in PE files */

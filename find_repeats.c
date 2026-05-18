@@ -74,10 +74,9 @@ static uint32_t get_free_chunk(OFFSET_MAP *map)
 
 static uint32_t get_map_idx(const uint8_t *buf, size_t pos)
 {
-    const uint32_t b0  = buf[pos];
-    const uint32_t b1  = buf[pos + 1];
-    const uint32_t idx = b0 | (b1 << 8);
-    return idx;
+    const uint32_t byte_lo = buf[pos];
+    const uint32_t byte_hi = buf[pos + 1];
+    return byte_lo | (byte_hi << 8);
 }
 
 static void set_offset(const uint8_t *buf, size_t pos, OFFSET_MAP *map)
