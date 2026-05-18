@@ -101,12 +101,12 @@ typedef struct {
     uint8_t bytes[8];
 } uint64_le;
 
-uint16_t get_uint16_le(uint16_le data)
+static uint16_t get_uint16_le(uint16_le data)
 {
     return (uint16_t)((uint32_t)data.bytes[0] + ((uint32_t)data.bytes[1] << 8));
 }
 
-uint32_t get_uint32_le(uint32_le data)
+static uint32_t get_uint32_le(uint32_le data)
 {
     return (uint32_t)data.bytes[0] +
            ((uint32_t)data.bytes[1] << 8) +
@@ -114,7 +114,7 @@ uint32_t get_uint32_le(uint32_le data)
            ((uint32_t)data.bytes[3] << 24);
 }
 
-uint64_t get_uint64_le(uint64_le data)
+static uint64_t get_uint64_le(uint64_le data)
 {
     return (uint64_t)data.bytes[0] +
            ((uint64_t)data.bytes[1] << 8) +
