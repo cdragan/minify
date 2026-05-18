@@ -51,7 +51,7 @@ static int save_file(const char *filename, BUFFER buf)
     }
 
     len = fwrite(buf.buf, 1, buf.size, file);
-    if (len != buf.size && ferror(file)) {
+    if (len != buf.size || ferror(file)) {
         fprintf(stderr, "Error: Failed to write to file %s\n", new_filename);
         fclose(file);
         return EXIT_FAILURE;
@@ -72,6 +72,7 @@ int main(int argc, char *argv[])
     uint8_t         *decompressed;
     size_t           compr_buffer_size;
     size_t           decompr_buffer_size;
+    int              ret = EXIT_SUCCESS;
 
     if (argc != 2) {
         fprintf(stderr, "Error: Invalid arguments\n");
@@ -115,8 +116,10 @@ int main(int argc, char *argv[])
 
     compressed = lza_compress(dest, compr_buffer_size, buf.buf, buf.size);
 
-    if ( ! compressed.lz)
-        return EXIT_FAILURE;
+    if ( ! compressed.lz) {
+        ret = EXIT_FAILURE;
+        goto cleanup;
+    }
 
     lza_decompress(decompressed,
                    buf.size,
@@ -126,7 +129,8 @@ int main(int argc, char *argv[])
 
     if (memcmp(buf.buf, decompressed, buf.size)) {
         fprintf(stderr, "Decompressed output doesn't match input data\n");
-        return EXIT_FAILURE;
+        ret = EXIT_FAILURE;
+        goto cleanup;
     }
 
     printf("Original    %zu bytes\n", buf.size);
@@ -141,8 +145,9 @@ int main(int argc, char *argv[])
     printf("LONGREP2    %zu\n", compressed.stats_longrep[2]);
     printf("LONGREP3    %zu\n", compressed.stats_longrep[3]);
 
+cleanup:
     free(dest);
     free(buf.buf);
 
-    return EXIT_SUCCESS;
+    return ret;
 }
