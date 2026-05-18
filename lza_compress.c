@@ -77,7 +77,7 @@ enum PACKET_TYPE {
 
 static void emit_type(COMPRESS *compress, enum PACKET_TYPE type)
 {
-    int type_size = 1;
+    unsigned int type_size = 1;
 
     switch (type) {
         case TYPE_MATCH:    type_size = 2; ++compress->sizes.stats_match;         break;
@@ -148,11 +148,11 @@ static void emit_distance(BIT_EMITTER *emitter, size_t distance)
     if (distance < 2)
         emit_bits(emitter, distance, 6);
     else {
-        const int bits_m1 = 31 - count_leading_zeroes((unsigned int)distance);
+        const unsigned int bits_m1 = 31U - (unsigned int)count_leading_zeroes((unsigned int)distance);
 
         distance &= ~((size_t)1 << bits_m1);
 
-        distance |= (uint32_t)bits_m1 << bits_m1;
+        distance |= (size_t)bits_m1 << bits_m1;
 
         emit_bits(emitter, distance, bits_m1 + 5);
     }

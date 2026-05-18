@@ -11,9 +11,9 @@
 
 static uint32_t decode_length(BIT_STREAM *stream)
 {
-    uint32_t data  = get_one_bit(stream);
-    uint32_t value = 2;
-    int      bits  = 3;
+    uint32_t     data  = get_one_bit(stream);
+    uint32_t     value = 2;
+    unsigned int bits  = 3;
 
     if (data) {
         data   = get_one_bit(stream);
@@ -38,7 +38,7 @@ static uint32_t decode_distance(BIT_STREAM *stream)
 
     bits = (data >> 1) - 1;
 
-    return (((data & 1) + 2) << bits) + get_bits(stream, (int)bits) + 1;
+    return (((data & 1) + 2) << bits) + get_bits(stream, bits) + 1;
 }
 
 void lz_decompress(void       *input_dest,

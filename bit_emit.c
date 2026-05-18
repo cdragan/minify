@@ -27,12 +27,12 @@ void emit_bit(BIT_EMITTER *emitter, uint32_t bit)
     }
 }
 
-void emit_bits(BIT_EMITTER *emitter, size_t value, int bits)
+void emit_bits(BIT_EMITTER *emitter, size_t value, unsigned int bits)
 {
-    assert(bits);
+    assert(bits > 0 && bits <= sizeof(value) * 8);
 
-    if (bits < (int)sizeof(value) * 8)
-        value <<= (int)sizeof(value) * 8 - bits;
+    if (bits < sizeof(value) * 8)
+        value <<= sizeof(value) * 8 - bits;
 
     do {
         const uint32_t bit = (uint32_t)((value >> (sizeof(value) * 8 - 1)) & 1U);

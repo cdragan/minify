@@ -13,6 +13,6 @@ typedef struct {
 
 void init_bit_stream(BIT_STREAM *stream, const void *buf, size_t size);
 
-uint32_t get_bits(BIT_STREAM *stream, int bits);
+uint32_t get_bits(BIT_STREAM *stream, unsigned int bits);
 
 uint32_t get_one_bit(BIT_STREAM *stream);

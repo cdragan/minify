@@ -2,8 +2,12 @@
  * Copyright (c) 2022 Chris Dragan
  */
 
+#include <assert.h>
+
 inline static int count_leading_zeroes(unsigned int value)
 {
+    assert(value != 0);
+
 #if defined(__GNUC__) || defined(__clang__)
     return __builtin_clz(value);
 #elif defined(_MSC_VER)

@@ -20,10 +20,12 @@ uint32_t get_one_bit(BIT_STREAM *stream)
     return get_bits(stream, 1);
 }
 
-uint32_t get_bits(BIT_STREAM *stream, int bits)
+uint32_t get_bits(BIT_STREAM *stream, unsigned int bits)
 {
     uint32_t value = 0;
     uint32_t data  = stream->data;
+
+    assert(bits > 0 && bits <= sizeof(value) * 8);
 
     while (bits) {
         if ( ! (uint8_t)data) {
