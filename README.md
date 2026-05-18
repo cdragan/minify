@@ -37,7 +37,7 @@ __minify__ works only for executables and not for DLLs.
 The compression is partially destructive:
 * Relocations are removed, so the executable can only be loaded at a fixed
   address in memory.
-* Exception table is removed, so Structural Exception Handling won't work.
+* Exception table is removed, so Structured Exception Handling won't work.
 
 
 How it works
@@ -62,7 +62,7 @@ Here are the steps taken by the compressor to create a small executable:
 7. Use a common compression algorithm to pack the data from the above points.
    Find repeated sequences of bytes and encode them as (distance-length) pairs.
    This is called [LZ77 encoding](https://en.wikipedia.org/wiki/LZ77_and_LZ78).
-   Subsequent packet types, literals, distances and lenghts are stored in
+   Subsequent packet types, literals, distances and lengths are stored in
    separate streams.  The stream of literals only has lower 7 bits of each byte.
    There is a separate stream which encodes differences in the 8th bit of each
    subsequent literal.
@@ -74,9 +74,10 @@ Here are the steps taken by the compressor to create a small executable:
     for example, fold the PE header into the MZ header, generate a single section,
     don't allow relocation (use fixed image base), etc.
 
-When the produced executable is loaded by the system, it simply follows the
-above steps in reverse order to get back the original executable, then jumps to the
-orignal entry point.
+When the produced executable is loaded by the system, it follows the above steps
+in reverse order: the arithmetic decoder runs first, then the LZ77 decompressor
+reconstructs the code and data streams, then the import loader fills out the IAT,
+and finally control transfers to the original entry point.
 
 
 How compression works
@@ -87,10 +88,12 @@ has low entropy (low noise), so it looks like many repeating patterns of data.
 Compressed data has high entropy (high noise), so it looks more random.
 
 The first step to compress data is to convert it to a format which has high rate
-of repetitions.  As an example, image and video compressors reorganize 2D data
-into 1-dimensional, then apply FFT to convert it to frequency/amplitude domain, where
-it is easier to find repeating patterns (e.g. usually low frequencies remain and
-high frequencies which look like noise either don't exist or can be filtered-out).
+of repetitions.  As an example, image and video compressors apply a discrete cosine
+transform (DCT) to 2D blocks to convert pixel data into the frequency/amplitude
+domain, then scan the resulting coefficients in a zig-zag order to produce a 1D
+stream.  This makes repeating patterns easier to find (e.g. usually low frequencies
+remain and high frequencies which look like noise either don't exist or can be
+filtered-out).
 Anyway, this step depends on the data to be compressed.  Each type of data can
 be transformed in a different way to achieve a format which has lower entropy and
 is thus easier to compress.
@@ -108,6 +111,6 @@ arithmetic coding or range coding.
 
 The biggest difficulty lies in putting these steps together.  For example, the way
 the data is encoded in the second step may achieve better or worse compression
-in the third step, depending on which repeating squences are selected.  As an example,
+in the third step, depending on which repeating sequences are selected.  As an example,
 in LZMA compression, the range coder in the third step drives the finding and selection
 of repetitions in the second step to achieve better compression.
