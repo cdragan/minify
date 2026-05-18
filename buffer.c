@@ -5,6 +5,7 @@
 #include "buffer.h"
 
 #include <assert.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 BUFFER buf_alloc(size_t size)
@@ -50,8 +51,11 @@ BUFFER buf_slice(BUFFER buf, size_t pos, size_t size)
 
 uint8_t *buf_at_offset(BUFFER buf, size_t pos, size_t size)
 {
-    if (pos >= buf.size || size > buf.size || pos + size > buf.size)
-        return NULL;
+    assert(pos < buf.size && size <= buf.size && pos + size <= buf.size);
+    if (pos >= buf.size || size > buf.size || pos + size > buf.size) {
+        fprintf(stderr, "Error: Malformed input\n");
+        exit(EXIT_FAILURE);
+    }
 
     return buf.buf + pos;
 }
