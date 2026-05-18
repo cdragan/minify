@@ -600,7 +600,7 @@ static uint32_t get_pe_offset(const void *buf, size_t size)
 
     pe_offset = get_uint32_le(dos_header->pe_offset);
 
-    if (pe_offset + sizeof(PE_HEADER) > size)
+    if (size < sizeof(PE_HEADER) || pe_offset > size - sizeof(PE_HEADER))
         return 0;
 
     pe_header = (const PE_HEADER *)at_offset(buf, pe_offset);
@@ -815,19 +815,25 @@ static uint32_t add_loader(BUFFER *output, const char *loader_name, uint32_t mac
         goto cleanup;
     }
 
-    if (file_buf.size < pe_offset + (uint32_t)sizeof(PE_HEADER)) {
+    if (file_buf.size < sizeof(PE_HEADER) || pe_offset > file_buf.size - sizeof(PE_HEADER)) {
         fprintf(stderr, "Error: Corrupted %s, PE header is outside of the file\n", filename);
         goto cleanup;
     }
 
     pe_header    = (const PE_HEADER *)at_offset(file_buf.buf, pe_offset);
     opt_header   = (const PE32_HEADER *)at_offset(file_buf.buf, pe_offset + (uint32_t)sizeof(PE_HEADER));
-    sect_offset  = pe_offset + (uint32_t)sizeof(PE_HEADER) + get_uint16_le(pe_header->optional_hdr_size);
     num_sections = get_uint16_le(pe_header->number_of_sections);
 
-    if (file_buf.size < sect_offset + num_sections * (uint32_t)sizeof(SECTION_HEADER)) {
-        fprintf(stderr, "Error: Corrupted %s, section headers are outside of the file\n", filename);
-        goto cleanup;
+    {
+        const size_t headers_size       = sizeof(PE_HEADER) + (size_t)get_uint16_le(pe_header->optional_hdr_size);
+        const size_t section_table_size = (size_t)num_sections * sizeof(SECTION_HEADER);
+        const size_t headers_end        = (size_t)pe_offset + headers_size + section_table_size;
+
+        if (headers_end > file_buf.size || headers_end > UINT32_MAX) {
+            fprintf(stderr, "Error: Corrupted %s, section headers are outside of the file\n", filename);
+            goto cleanup;
+        }
+        sect_offset = (uint32_t)((size_t)pe_offset + headers_size);
     }
 
     section_header = (const SECTION_HEADER *)at_offset(file_buf.buf, sect_offset);
@@ -849,7 +855,7 @@ static uint32_t add_loader(BUFFER *output, const char *loader_name, uint32_t mac
     text_virt_offs = get_uint32_le(section_header[i].virtual_address);
     entry_point    = get_uint32_le(opt_header->entry_point);
 
-    if (file_buf.size < text_pos + text_file_size) {
+    if (file_buf.size < text_file_size || text_pos > file_buf.size - text_file_size) {
         fprintf(stderr, "Error: Corrupted %s, .text section is outside of the file\n", filename);
         goto cleanup;
     }
@@ -1212,12 +1218,18 @@ BUFFER exe_pe(const void *buf, size_t size)
         return output;
     }
 
-    sect_offset  = pe_offset + (uint32_t)sizeof(PE_HEADER) + get_uint16_le(pe_header->optional_hdr_size);
     num_sections = get_uint16_le(pe_header->number_of_sections);
 
-    if (sect_offset + num_sections * sizeof(SECTION_HEADER) > size) {
-        fprintf(stderr, "Error: Optional header size or sections exceed file size\n");
-        return output;
+    {
+        const size_t headers_size       = sizeof(PE_HEADER) + (size_t)get_uint16_le(pe_header->optional_hdr_size);
+        const size_t section_table_size = (size_t)num_sections * sizeof(SECTION_HEADER);
+        const size_t headers_end        = (size_t)pe_offset + headers_size + section_table_size;
+
+        if (headers_end > size || headers_end > UINT32_MAX) {
+            fprintf(stderr, "Error: Optional header size or sections exceed file size\n");
+            return output;
+        }
+        sect_offset = (uint32_t)((size_t)pe_offset + headers_size);
     }
 
     if (get_uint16_le(pe_header->optional_hdr_size) < sizeof(PE32_HEADER)) {
