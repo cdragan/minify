@@ -29,7 +29,7 @@ int main(int argc, char *argv[])
     if ( ! buf.size)
         return EXIT_FAILURE;
 
-    dest_size = buf.size * 110 / 100; /* +10% for data with high entropy */
+    dest_size = buf.size + buf.size / 10 + 32; /* +10% for high entropy, +32 pad for small inputs */
     dest      = (char *)malloc(dest_size);
     if ( ! dest) {
         perror(NULL);

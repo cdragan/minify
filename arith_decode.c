@@ -17,7 +17,7 @@ void init_model(MODEL *model)
     model->prob[1] = hist_buckets * 16 + 1;
 
     for (i = 0; i < hist_buckets; i++)
-        model->history[i] = 0xAAAAAAAAULL;
+        model->history[i] = 0xAAAAAAAAU;
 }
 
 void update_model(MODEL *model, uint32_t bit)
