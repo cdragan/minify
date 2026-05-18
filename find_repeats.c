@@ -174,7 +174,7 @@ static int calc_match_score(OCCURRENCE occ)
     /* Number of bits if this was emitted as MATCH packet */
     const int match_hdr_bits = 2;
     const int length_bits    = (occ.length <= 9) ? 4 : (occ.length <= 17) ? 5 : (2 + LZA_LENGTH_TAIL_BITS);
-    const int distance_bits  = (occ.distance < 2) ? 6 : (36 - count_leading_zeroes(occ.distance));
+    const int distance_bits  = (occ.distance <= 2) ? 6 : (36 - count_leading_zeroes((unsigned int)(occ.distance - 1)));
     const int match_bits     = match_hdr_bits + length_bits + distance_bits;
 
     return lit_bits - match_bits;
