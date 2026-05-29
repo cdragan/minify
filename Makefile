@@ -71,7 +71,8 @@ endif
 # Default build flags
 
 # Debug vs release
-release ?= 0
+debug   ?= 1
+release ?= $(if $(filter 1,$(debug)),0,1)
 
 ##############################################################################
 # Compiler flags
