@@ -934,7 +934,7 @@ static int shift_chained_fixups(uint8_t        *linkedit_buf,
 
                     slot = (uint64_t *)(seg_bytes + chain_offs);
                     raw  = *slot;
-                    is_bind = (raw >> 63) & 1U;
+                    is_bind = (int)((raw >> 63) & 1U);
                     next    = (raw >> 51) & 0xFFFU;
 
                     if ( ! is_bind) {

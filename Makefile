@@ -63,12 +63,6 @@ pe_lz_decompress_sources += bit_stream.c
 pe_lz_decompress_sources += lz_decompress.c
 pe_lz_decompress_sources += pe_lz_decompress.c
 
-loaders += macho_loader
-macho_loader_sources += arith_decode.c
-macho_loader_sources += bit_stream.c
-macho_loader_sources += lz_decompress.c
-macho_loader_sources += macho_loader.c
-
 ##############################################################################
 # Determine target OS
 
@@ -78,6 +72,15 @@ ARCH ?= $(shell uname -m)
 ifneq (,$(filter CYGWIN% MINGW% MSYS%, $(UNAME)))
     # Note: Still use cl.exe on Windows
     UNAME = Windows
+endif
+
+# macho_loader uses arm64 syscall asm; it only compiles on macOS arm64.
+ifeq ($(UNAME)_$(ARCH), Darwin_arm64)
+    loaders += macho_loader
+    macho_loader_sources += arith_decode.c
+    macho_loader_sources += bit_stream.c
+    macho_loader_sources += lz_decompress.c
+    macho_loader_sources += macho_loader.c
 endif
 
 ##############################################################################
