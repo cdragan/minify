@@ -1449,6 +1449,11 @@ BUFFER exe_pe(const void *buf, size_t size)
             case DIR_BASE_RELOCATION_TABLE:
             /* Debug table is not needed, fill it with zeroes. */
             case DIR_DEBUG:
+            /* Load config holds the /GS cookie location and CFG data for the
+             * OS loader.  The output PE drops this directory and the CRT
+             * initializes the security cookie itself, so fill it with zeroes.
+             */
+            case DIR_LOAD_CONFIG_TABLE:
                 memset(entry_buf.buf, 0, entry_buf.size);
                 break;
 
