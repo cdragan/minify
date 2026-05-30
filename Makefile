@@ -132,6 +132,7 @@ ifeq ($(UNAME), Windows)
     endif
 
     ifeq ($(CC), clang-cl.exe)
+        STUB_CFLAGS += -fno-builtin
         ifeq ($(ARCH), x86)
             STUB_CFLAGS += -m32
         endif
