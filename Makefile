@@ -10,13 +10,16 @@ minify_src_files += arith_encode.c
 minify_src_files += bit_emit.c
 minify_src_files += bit_stream.c
 minify_src_files += buffer.c
+minify_src_files += exe_macho.c
 minify_src_files += exe_pe.c
 minify_src_files += find_repeats.c
 minify_src_files += load_file.c
 minify_src_files += lz_decompress.c
 minify_src_files += lza_compress.c
 minify_src_files += lza_decompress.c
+minify_src_files += macho_sign.c
 minify_src_files += minify.c
+minify_src_files += sha256.c
 
 targets += arith_encoder
 arith_encoder_src_files += arith_decode.c
@@ -43,6 +46,10 @@ test_bit_stream_src_files += bit_emit.c
 test_bit_stream_src_files += bit_stream.c
 test_bit_stream_src_files += test_bit_stream.c
 
+tests += test_sha256
+test_sha256_src_files += sha256.c
+test_sha256_src_files += test_sha256.c
+
 loaders += pe_load_imports
 pe_load_imports_sources += pe_load_imports.c
 
@@ -55,6 +62,12 @@ loaders += pe_lz_decompress
 pe_lz_decompress_sources += bit_stream.c
 pe_lz_decompress_sources += lz_decompress.c
 pe_lz_decompress_sources += pe_lz_decompress.c
+
+loaders += macho_loader
+macho_loader_sources += arith_decode.c
+macho_loader_sources += bit_stream.c
+macho_loader_sources += lz_decompress.c
+macho_loader_sources += macho_loader.c
 
 ##############################################################################
 # Determine target OS
@@ -155,7 +168,7 @@ else
     STUB_CFLAGS += -fvisibility=hidden
     STUB_CFLAGS += -fPIC
     STUB_CFLAGS += -MD
-    STUB_CFLAGS += -Os -DNDEBUG
+    STUB_CFLAGS += -DNDEBUG
     STUB_CFLAGS += -fomit-frame-pointer
     STUB_CFLAGS += -fno-stack-check -fno-stack-protector
     STUB_CFLAGS += -ffunction-sections -fdata-sections
@@ -174,6 +187,7 @@ ifeq ($(UNAME), Linux)
         LDFLAGS    += -flto=auto -fuse-linker-plugin
     endif
     LDFLAGS      += -Wl,-Map=$(basename $@).map
+    STUB_CFLAGS  += -Os
     STUB_LDFLAGS += -Wl,--gc-sections -Wl,--as-needed
     STUB_STRIP = strip
     DISASM_COMMAND = objdump -d -M intel $2 > $1
@@ -191,6 +205,8 @@ ifeq ($(UNAME), Darwin)
         export MallocNanoZone=0
     endif
     LDFLAGS      += -Wl,-map,$(basename $@).map
+    STUB_CFLAGS  += -Oz
+    STUB_CFLAGS  += -fno-asynchronous-unwind-tables -fno-unwind-tables
     STUB_CFLAGS  += -flto
     STUB_LDFLAGS += -flto
     STUB_LDFLAGS += -Wl,-dead_strip
@@ -283,6 +299,27 @@ $1: $$(call CMDLINE_PATH,$1)
 endef
 
 $(foreach test, $(tests), $(eval $(call RUN_TEST,$(test))))
+
+##############################################################################
+# Mach-O test (macOS arm64 only)
+
+ifeq ($(UNAME)_$(ARCH), Darwin_arm64)
+
+macho_test_dir = $(out_dir)/macho_test
+
+macho_test: $(call CMDLINE_PATH,minify) $(out_loader_dir)/macho_loader
+	rm -rf $(macho_test_dir)
+	mkdir -p $(macho_test_dir)
+	cp $< $(macho_test_dir)/probe_in
+	cp $< $(macho_test_dir)/inner_in
+	$< $(macho_test_dir)/probe_in
+	$(macho_test_dir)/mini.probe_in $(macho_test_dir)/inner_in
+	test -s $(macho_test_dir)/mini.inner_in
+
+test: macho_test
+.PHONY: macho_test
+
+endif
 
 ##############################################################################
 # Stubs

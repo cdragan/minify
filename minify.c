@@ -2,6 +2,7 @@
  * Copyright (c) 2026 Chris Dragan
  */
 
+#include "exe_macho.h"
 #include "exe_pe.h"
 #include "lza_compress.h"
 #include "lza_decompress.h"
@@ -12,9 +13,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+static char saved_filename[1024];
+
 static int save_file(const char *filename, BUFFER buf)
 {
-    static char new_filename[1024];
+    char       *new_filename = saved_filename;
     static char prefix[] = "mini.";
     FILE       *file;
     const char *slash;
@@ -33,12 +36,12 @@ static int save_file(const char *filename, BUFFER buf)
     }
 #endif
 
-    if (len + sizeof(prefix) > sizeof(new_filename)) {
+    if (len + sizeof(prefix) > sizeof(saved_filename)) {
         fprintf(stderr, "Error: File name %s is too long\n", filename);
         return EXIT_FAILURE;
     }
 
-    snprintf(new_filename, sizeof(new_filename), "%.*s%s%s",
+    snprintf(new_filename, sizeof(saved_filename), "%.*s%s%s",
              (int)(slash ? (slash - filename + 1) : 0),
              filename,
              prefix,
@@ -72,6 +75,7 @@ int main(int argc, char *argv[])
     uint8_t         *decompressed;
     size_t           compr_buffer_size;
     size_t           decompr_buffer_size;
+    int              is_macho = 0;
     int              ret = EXIT_SUCCESS;
 
     if (argc != 2) {
@@ -84,17 +88,24 @@ int main(int argc, char *argv[])
     if ( ! buf.size)
         return EXIT_FAILURE;
 
-    if (is_pe_file(buf.buf, buf.size)) {
+    is_macho = is_macho_file(buf.buf, buf.size);
+    if (is_macho || is_pe_file(buf.buf, buf.size)) {
         int    err    = EXIT_SUCCESS;
-        BUFFER output = exe_pe(buf.buf, buf.size);
+        BUFFER output = is_macho ? exe_macho(buf.buf, buf.size) : exe_pe(buf.buf, buf.size);
+
         if ( ! output.buf)
             err = EXIT_FAILURE;
         else
             err = save_file(argv[1], output);
 
-        if ( ! err)
+        if ( ! err) {
             printf("Compressed %zu -> %zu (%zu %%)\n",
                    buf.size, output.size, output.size * 100 / buf.size);
+
+            if (is_macho) {
+                macho_set_executable(saved_filename);
+            }
+        }
 
         if (output.buf)
             free(output.buf);
