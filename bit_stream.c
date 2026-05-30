@@ -25,7 +25,7 @@ uint32_t get_bits(BIT_STREAM *stream, unsigned int bits)
     uint32_t value = 0;
     uint32_t data  = stream->data;
 
-    assert(bits > 0 && bits <= sizeof(value) * 8);
+    assert(bits <= sizeof(value) * 8);
 
     while (bits) {
         if ( ! (uint8_t)data) {

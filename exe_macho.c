@@ -3,10 +3,12 @@
  */
 
 #include "exe_macho.h"
+#include "arith_decode.h"
 #include "arith_encode.h"
 #include "buffer.h"
 #include "load_file.h"
 #include "lza_compress.h"
+#include "lza_decompress.h"
 #include "macho_common.h"
 #include "macho_sign.h"
 #include "static_assert.h"
@@ -1045,6 +1047,48 @@ static void zero_dysymtab(DYSYMTAB_COMMAND *dst)
     dst->nlocrel = 0;
 }
 
+/* Decode the freshly produced payload and compare it against the originals,
+ * so a compressor/decompressor mismatch aborts here instead of emitting a
+ * packed binary that only fails at runtime inside the loader. */
+static int verify_macho_compression(const uint8_t *uncompressed,
+                                    size_t         uncompressed_size,
+                                    const uint8_t *lz_stream,
+                                    size_t         lz_stream_size,
+                                    const uint8_t *arith_data,
+                                    size_t         arith_data_size)
+{
+    BUFFER   scratch = buf_alloc(lz_stream_size + uncompressed_size);
+    uint8_t *lz_check;
+    uint8_t *raw_check;
+    int      result = 1;
+
+    if ( ! scratch.buf) {
+        fprintf(stderr, "Error: OOM compression verification scratch\n");
+        return 1;
+    }
+
+    lz_check  = scratch.buf;
+    raw_check = scratch.buf + lz_stream_size;
+
+    arith_decode(lz_check, lz_stream_size, arith_data, arith_data_size);
+    if (memcmp(lz_check, lz_stream, lz_stream_size) != 0) {
+        fprintf(stderr, "Error: arithmetic coding verification failed\n");
+        goto done;
+    }
+
+    lz_decompress(raw_check, uncompressed_size, lz_check);
+    if (memcmp(raw_check, uncompressed, uncompressed_size) != 0) {
+        fprintf(stderr, "Error: LZ77 compression verification failed\n");
+        goto done;
+    }
+
+    result = 0;
+
+done:
+    free(scratch.buf);
+    return result;
+}
+
 BUFFER exe_macho(const void *buf, size_t size)
 {
     BUFFER         empty            = { NULL, 0 };
@@ -1214,6 +1258,12 @@ BUFFER exe_macho(const void *buf, size_t size)
         arith_encoded_size = arith_encode(arith_dest, arith_dest_cap, lz_dest, lz_sizes.lz);
         if ( ! arith_encoded_size || arith_encoded_size > arith_dest_cap) {
             fprintf(stderr, "Error: arith encoding failed\n");
+            goto cleanup;
+        }
+
+        if (verify_macho_compression(combined_raw.buf, combined_raw_size,
+                                     lz_dest, lz_sizes.lz,
+                                     arith_dest, arith_encoded_size)) {
             goto cleanup;
         }
     }
