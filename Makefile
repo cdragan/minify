@@ -304,23 +304,63 @@ endef
 $(foreach test, $(tests), $(eval $(call RUN_TEST,$(test))))
 
 ##############################################################################
-# Mach-O test (macOS arm64 only)
-
-ifeq ($(UNAME)_$(ARCH), Darwin_arm64)
+# Mach-O test
 
 macho_test_dir = $(out_dir)/macho_test
 
-macho_test: $(call CMDLINE_PATH,minify) $(out_loader_dir)/macho_loader
+macho_compress_test: $(call CMDLINE_PATH,minify)
 	rm -rf $(macho_test_dir)
 	mkdir -p $(macho_test_dir)
-	cp $< $(macho_test_dir)/probe_in
-	cp $< $(macho_test_dir)/inner_in
-	$< $(macho_test_dir)/probe_in
+	cp loaders/macos/arm64/macho_loader $(macho_test_dir)/in_arm64
+	$< $(macho_test_dir)/in_arm64
+	test -s $(macho_test_dir)/mini.in_arm64
+
+test: macho_compress_test
+.PHONY: macho_compress_test
+
+ifeq ($(UNAME)_$(ARCH), Darwin_arm64)
+
+macho_run_test: macho_compress_test
+	cp $(call CMDLINE_PATH,minify) $(macho_test_dir)/probe_in
+	cp $(call CMDLINE_PATH,minify) $(macho_test_dir)/inner_in
+	$(call CMDLINE_PATH,minify) $(macho_test_dir)/probe_in
 	$(macho_test_dir)/mini.probe_in $(macho_test_dir)/inner_in
 	test -s $(macho_test_dir)/mini.inner_in
 
-test: macho_test
-.PHONY: macho_test
+test: macho_run_test
+.PHONY: macho_run_test
+
+endif
+
+##############################################################################
+# PE test
+
+pe_test_dir = $(out_dir)/pe_test
+
+pe_compress_test: $(call CMDLINE_PATH,minify)
+	rm -rf $(pe_test_dir)
+	mkdir -p $(pe_test_dir)
+	cp loaders/windows/x86/pe_load_imports.exe $(pe_test_dir)/in_x86.exe
+	cp loaders/windows/x64/pe_load_imports.exe $(pe_test_dir)/in_x64.exe
+	$< $(pe_test_dir)/in_x86.exe
+	$< $(pe_test_dir)/in_x64.exe
+	test -s $(pe_test_dir)/mini.in_x86.exe
+	test -s $(pe_test_dir)/mini.in_x64.exe
+
+test: pe_compress_test
+.PHONY: pe_compress_test
+
+ifeq ($(UNAME), Windows)
+
+pe_run_test: pe_compress_test
+	cp $(call CMDLINE_PATH,minify) $(pe_test_dir)/probe_in.exe
+	cp $(call CMDLINE_PATH,minify) $(pe_test_dir)/inner_in.exe
+	$(call CMDLINE_PATH,minify) $(pe_test_dir)/probe_in.exe
+	$(pe_test_dir)/mini.probe_in.exe $(pe_test_dir)/inner_in.exe
+	test -s $(pe_test_dir)/mini.inner_in.exe
+
+test: pe_run_test
+.PHONY: pe_run_test
 
 endif
 

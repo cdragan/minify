@@ -655,28 +655,14 @@ static int load_loader(LOADER_BLOB *out, const char *loader_name)
     uint64_t                   blob_end;
     BUFFER                     blob;
     int                        error = 1;
-    const char                *candidate_dirs[] = { "Out/loaders", "loaders/macos/arm64" };
-    size_t                     dir_idx;
 
     out->bytes.buf = NULL;
     out->bytes.size = 0;
     file_buf.buf = NULL;
     file_buf.size = 0;
 
-    for (dir_idx = 0; dir_idx < sizeof(candidate_dirs) / sizeof(candidate_dirs[0]); dir_idx++) {
-        FILE *probe;
-        snprintf(filename, sizeof(filename), "%s/%s", candidate_dirs[dir_idx], loader_name);
-        /* Probe before load_file() so a missing dir does not perror. */
-        probe = fopen(filename, "rb");
-        if ( ! probe) {
-            continue;
-        }
-        fclose(probe);
-        file_buf = load_file(filename);
-        if (file_buf.buf) {
-            break;
-        }
-    }
+    snprintf(filename, sizeof(filename), "loaders/macos/arm64/%s", loader_name);
+    file_buf = load_file(filename);
 
     if ( ! file_buf.buf) {
         fprintf(stderr, "Error: failed to load loader '%s'\n", loader_name);
