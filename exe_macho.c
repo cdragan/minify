@@ -1052,7 +1052,7 @@ BUFFER exe_macho(const void *buf, size_t size)
     BUFFER         compress_scratch = { NULL, 0 };
     BUFFER         combined_raw     = { NULL, 0 };
     BUFFER         combined_payload = { NULL, 0 };
-    MACHO_DATA_REBASE *data_rebases = NULL;
+    BUFFER         data_rebases     = { NULL, 0 };
     LOADER_BLOB    loader           = { { NULL, 0 }, 0, 0, 0 };
     MACHO_INPUT    input;
     int            error = 1;
@@ -1145,16 +1145,17 @@ BUFFER exe_macho(const void *buf, size_t size)
         uint32_t recount = 0;
         int      recheck = 1;
 
-        data_rebases = malloc((size_t)data_rebase_count * sizeof(MACHO_DATA_REBASE));
-        if (data_rebase_count && ! data_rebases) {
+        data_rebases = buf_alloc((size_t)data_rebase_count * sizeof(MACHO_DATA_REBASE));
+        if (data_rebase_count && ! data_rebases.buf) {
             fprintf(stderr, "Error: OOM data rebase table\n");
             goto cleanup;
         }
-        if (walk_data_chain(input_bytes, &input, vm_shift, data_rebases, &recount, &recheck) ||
+        if (walk_data_chain(input_bytes, &input, vm_shift,
+                            (MACHO_DATA_REBASE *)data_rebases.buf, &recount, &recheck) ||
             ! recheck || recount != data_rebase_count) {
             data_eligible = 0;
-            free(data_rebases);
-            data_rebases = NULL;
+            free(data_rebases.buf);
+            data_rebases.buf = NULL;
         }
         else {
             data_content_size = (uint32_t)input.data_seg->filesize;
@@ -1185,7 +1186,7 @@ BUFFER exe_macho(const void *buf, size_t size)
         }
         memcpy(combined_raw.buf, input_bytes, text_size);
         if (data_folded) {
-            memcpy((uint8_t *)combined_raw.buf + text_size, data_rebases, rebase_bytes);
+            memcpy((uint8_t *)combined_raw.buf + text_size, data_rebases.buf, rebase_bytes);
             memcpy((uint8_t *)combined_raw.buf + text_size + rebase_bytes,
                    input_bytes + input.data_seg->fileoff, data_content_size);
         }
@@ -1728,7 +1729,7 @@ cleanup:
     free(compress_scratch.buf);
     free(combined_raw.buf);
     free(combined_payload.buf);
-    free(data_rebases);
+    free(data_rebases.buf);
 
     if (error) {
         free(output.buf);
