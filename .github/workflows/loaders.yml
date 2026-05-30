@@ -1,0 +1,73 @@
+name: Loaders
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler:
+          - cl
+          - clang-cl
+        arch:
+          - x86
+          - x64
+    steps:
+      - uses: msys2/setup-msys2@v2
+        with:
+          path-type: inherit
+      - name: Remove link.exe from MSYS2
+        shell: msys2 {0}
+        run: rm -f /bin/link.exe
+      - uses: actions/checkout@v3
+      - name: Build loaders
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.arch }}
+          msys2 -c "make build_loaders release=1 CC=${{ matrix.compiler }}.exe ARCH=${{ matrix.arch }}"
+      - name: Collect changed loaders
+        shell: msys2 {0}
+        run: |
+          mkdir -p changed
+          for loader in pe_load_imports pe_arith_decode pe_lz_decompress; do
+            built="Out/loaders/$loader.exe"
+            committed="loaders/windows/${{ matrix.arch }}/$loader.exe"
+            if [ ! -f "$committed" ] || ! cmp -s "$built" "$committed"; then
+              cp "$built" "changed/$loader.exe"
+            fi
+          done
+          ls -l changed || true
+      - name: Upload changed loaders
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: loaders-windows-${{ matrix.compiler }}-${{ matrix.arch }}
+          path: changed
+          if-no-files-found: ignore
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Build loaders
+        run: make build_loaders release=1
+      - name: Collect changed loader
+        run: |
+          mkdir -p changed
+          if ! cmp -s Out/loaders/macho_loader loaders/macos/arm64/macho_loader; then
+            cp Out/loaders/macho_loader changed/
+          fi
+          ls -l changed || true
+      - name: Upload changed loader
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: loaders-macos-arm64
+          path: changed
+          if-no-files-found: ignore

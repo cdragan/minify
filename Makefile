@@ -131,11 +131,18 @@ ifeq ($(UNAME), Windows)
         STUB_CFLAGS += -GL-
     endif
 
+    ifeq ($(CC), clang-cl.exe)
+        ifeq ($(ARCH), x86)
+            STUB_CFLAGS += -m32
+        endif
+    endif
+
     STUB_LDFLAGS += -nodefaultlib -stack:0x100000,0x100000
     STUB_LDFLAGS += -nologo
     STUB_LDFLAGS += -subsystem:windows
     STUB_LDFLAGS += -entry:loader
     STUB_LDFLAGS += -merge:.data=.text
+    STUB_LDFLAGS += -Brepro
 
     DISASM_COMMAND = dumpbin -disasm -section:.text -nologo -out:$1 $2
 else
@@ -213,6 +220,7 @@ ifeq ($(UNAME), Darwin)
     STUB_CFLAGS  += -flto
     STUB_LDFLAGS += -flto
     STUB_LDFLAGS += -Wl,-dead_strip
+    STUB_LDFLAGS += -Wl,-no_uuid
     STUB_STRIP = strip -x
     DISASM_COMMAND = objdump -d --x86-asm-syntax=intel $2 > $1
 endif
@@ -391,6 +399,9 @@ $(out_loader_dir):
 	mkdir -p $@
 
 $(foreach loader, $(loaders), $(eval $(call STUB_RULE,$(loader))))
+
+build_loaders: $(foreach loader, $(loaders), $(out_loader_dir)/$(loader)$(exe_suffix))
+.PHONY: build_loaders
 
 $(foreach src, $(sort $(all_loader_sources)), $(eval $(call STUB_CC_RULE,$(src))))
 
