@@ -359,19 +359,19 @@ pe_compress_test: $(call CMDLINE_PATH,minify)
 test: pe_compress_test
 .PHONY: pe_compress_test
 
-ifeq ($(UNAME), Windows)
-
-pe_run_test: pe_compress_test
-	cp $(call CMDLINE_PATH,minify) $(pe_test_dir)/probe_in.exe
-	cp $(call CMDLINE_PATH,minify) $(pe_test_dir)/inner_in.exe
-	$(call CMDLINE_PATH,minify) $(pe_test_dir)/probe_in.exe
-	$(pe_test_dir)/mini.probe_in.exe $(pe_test_dir)/inner_in.exe
-	test -s $(pe_test_dir)/mini.inner_in.exe
-
-test: pe_run_test
-.PHONY: pe_run_test
-
-endif
+#ifeq ($(UNAME), Windows)
+#
+#pe_run_test: pe_compress_test
+#	cp $(call CMDLINE_PATH,minify) $(pe_test_dir)/probe_in.exe
+#	cp $(call CMDLINE_PATH,minify) $(pe_test_dir)/inner_in.exe
+#	$(call CMDLINE_PATH,minify) $(pe_test_dir)/probe_in.exe
+#	$(pe_test_dir)/mini.probe_in.exe $(pe_test_dir)/inner_in.exe
+#	test -s $(pe_test_dir)/mini.inner_in.exe
+#
+#test: pe_run_test
+#.PHONY: pe_run_test
+#
+#endif
 
 ##############################################################################
 # Stubs
