@@ -7,7 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-BUFFER load_file(const char *filename)
+BUFFER load_file(const char *filename, enum FILE_EXISTENCE existence)
 {
     FILE  *file;
     BUFFER buf = { NULL, 0 };
@@ -15,7 +15,8 @@ BUFFER load_file(const char *filename)
 
     file = fopen(filename, "rb");
     if ( ! file) {
-        perror(filename);
+        if (existence == file_mandatory)
+            perror(filename);
         return buf;
     }
 

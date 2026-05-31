@@ -8,6 +8,8 @@
 #include "load_file.h"
 #include "lza_decompress.h"
 #include "lza_compress.h"
+#include "map_exe.h"
+#include "map_pe.h"
 #include "static_assert.h"
 
 #include <assert.h>
@@ -806,7 +808,7 @@ static uint32_t add_loader(BUFFER *output, const char *loader_name, uint32_t mac
              (machine == PE_MACHINE_X86_32) ? "x86" : "x64",
              loader_name);
 
-    file_buf = load_file(filename);
+    file_buf = load_file(filename, file_mandatory);
     if ( ! file_buf.buf)
         return ~0U;
 
@@ -1144,7 +1146,44 @@ static int install_live_layout(BUFFER buf, uint16_t pe_format, const LAYOUT *lay
     return 1;
 }
 
-BUFFER exe_pe(const void *buf, size_t size)
+static int build_pe_map_table(BUFFER                map,
+                              const SECTION_HEADER *section_header,
+                              uint32_t              num_sections,
+                              uint32_t              va_start,
+                              uint32_t              input_size,
+                              uint64_t              image_base,
+                              MAP_TABLE            *out)
+{
+    uint32_t i;
+
+    map_table_init(out);
+
+    if (pe_parse_map(map, va_start, input_size, image_base, out))
+        return -1;
+
+    if (out->count)
+        return 0;
+
+    for (i = 0; i < num_sections; i++) {
+        const uint32_t section_va = get_uint32_le(section_header[i].virtual_address);
+        const uint32_t va_size    = get_uint32_le(section_header[i].virtual_size);
+        char           name[9];
+
+        if (section_va < va_start || section_va - va_start >= input_size)
+            continue;
+
+        memcpy(name, section_header[i].name, 8);
+        name[8] = 0;
+
+        if (map_table_add(out, name, image_base + section_va,
+                          section_va - va_start, va_size))
+            return -1;
+    }
+
+    return 0;
+}
+
+BUFFER exe_pe(const void *buf, size_t size, BUFFER map)
 {
     const PE_HEADER      *pe_header;
     const PE32_HEADER    *opt_header;
@@ -1164,6 +1203,9 @@ BUFFER exe_pe(const void *buf, size_t size)
     BUFFER                arith_decoder  = { NULL, 0 };
     BUFFER                header_data    = { NULL, 0 };
     BUFFER                live_layout    = { NULL, 0 };
+    MAP_TABLE             map_table;
+    SYMBOL_BIT_COUNT      bit_count      = { NULL, NULL, 0 };
+    int                   have_map       = 0;
     uint32_t              machine;
     uint32_t              dir_size;
     const uint32_t        pe_offset      = get_pe_offset(buf, size);
@@ -1180,6 +1222,8 @@ BUFFER exe_pe(const void *buf, size_t size)
     int                   error          = 1;
     uint16_t              pe_flags;
     uint16_t              pe_format;
+
+    map_table_init(&map_table);
 
     /* Parse PE headers */
     assert(pe_offset);
@@ -1501,9 +1545,34 @@ BUFFER exe_pe(const void *buf, size_t size)
     /* TODO separate .text section into streams */
     /* TODO add loader to restore .text section */
 
+    /* Build the layout report table and symbol bit count tracking. */
+    {
+        const uint32_t input_size = layout.lz77_data_rva - va_start;
+
+        if (build_pe_map_table(map,
+                               section_header,
+                               num_sections,
+                               va_start,
+                               input_size,
+                               layout.image_base,
+                               &map_table) == 0 &&
+            map_table.count) {
+
+            map_table_sort(&map_table);
+
+            if (map_table_fill_gaps(&map_table, input_size) == 0 &&
+                map_table_make_tracker(&map_table, input_size, &bit_count) == 0)
+                have_map = 1;
+        }
+    }
+
     /* Compress the program's address space with LZ77 */
     lz77_data  = output;
-    compressed = lz_compress(lz77_data.buf, lz77_data.size, process_va.buf + va_start, layout.lz77_data_rva - va_start);
+    compressed = lz_compress(lz77_data.buf,
+                             lz77_data.size,
+                             process_va.buf + va_start,
+                             layout.lz77_data_rva - va_start,
+                             have_map ? &bit_count : NULL);
 
     if ( ! compressed.lz)
         goto cleanup;
@@ -1626,6 +1695,23 @@ BUFFER exe_pe(const void *buf, size_t size)
     printf("        import dir rva           0x%x (%u bytes)\n", layout.import_dir_rva,        layout.end_rva - layout.import_dir_rva);
     printf("        end rva                  0x%x\n",            layout.end_rva);
 
+    if (have_map) {
+        const size_t header        = new_header_size;
+        const size_t payload_offs  = header;
+        const size_t payload_size  = layout.arith_decoder_rva - layout.comp_data_rva;
+        const MAP_OUT_REGION regions[] = {
+            { "PE header",          0,                                                            header,                                                       0 },
+            { "compressed payload", payload_offs,                                                 payload_size,                                                 1 },
+            { "arith decoder",      header + (layout.arith_decoder_rva - layout.comp_data_rva),   layout.live_layout_rva  - layout.arith_decoder_rva,           0 },
+            { "live layout",        header + (layout.live_layout_rva   - layout.comp_data_rva),   layout.import_str_rva   - layout.live_layout_rva,             0 },
+            { "import str",         header + (layout.import_str_rva    - layout.comp_data_rva),   layout.mini_iat_rva     - layout.import_str_rva,              0 },
+            { "mini iat",           header + (layout.mini_iat_rva      - layout.comp_data_rva),   layout.import_dir_rva   - layout.mini_iat_rva,                0 },
+            { "import dir",         header + (layout.import_dir_rva    - layout.comp_data_rva),   layout.end_rva          - layout.import_dir_rva,              0 },
+        };
+
+        map_print_report(regions, sizeof(regions) / sizeof(regions[0]), &map_table, &bit_count);
+    }
+
     /* Verify compression */
     if (verify_compression(mem_image, &layout, output, lz77_data_size, (uint32_t)compressed.compressed))
         goto cleanup;
@@ -1641,6 +1727,10 @@ BUFFER exe_pe(const void *buf, size_t size)
     error = 0;
 
 cleanup:
+    if (have_map)
+        map_free_tracker(&bit_count);
+    map_table_free(&map_table);
+
     if (error) {
         free(mem_image.buf);
 

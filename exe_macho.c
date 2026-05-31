@@ -11,6 +11,8 @@
 #include "lza_decompress.h"
 #include "macho_common.h"
 #include "macho_sign.h"
+#include "map_exe.h"
+#include "map_macho.h"
 #include "static_assert.h"
 
 #include <assert.h>
@@ -662,7 +664,7 @@ static int load_loader(LOADER_BLOB *out, const char *loader_name)
     file_buf.size = 0;
 
     snprintf(filename, sizeof(filename), "loaders/macos/arm64/%s", loader_name);
-    file_buf = load_file(filename);
+    file_buf = load_file(filename, file_mandatory);
 
     if ( ! file_buf.buf) {
         fprintf(stderr, "Error: failed to load loader '%s'\n", loader_name);
@@ -1075,7 +1077,73 @@ done:
     return result;
 }
 
-BUFFER exe_macho(const void *buf, size_t size)
+static int build_macho_map_table(BUFFER             map,
+                                 const MACHO_INPUT *input,
+                                 size_t             rebase_bytes,
+                                 uint32_t           data_content_size,
+                                 int                data_folded,
+                                 MAP_TABLE         *out)
+{
+    MACHO_MAP_CONTEXT ctx;
+    const size_t      text_size = input->text_seg->filesize;
+    const SECTION_64 *sect;
+    uint32_t          i;
+    char              name[17];
+
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.text_vmaddr       = input->text_seg->vmaddr;
+    ctx.text_size         = text_size;
+    ctx.rebase_bytes      = rebase_bytes;
+    ctx.data_vmaddr       = input->data_seg ? input->data_seg->vmaddr : 0;
+    ctx.data_content_size = data_content_size;
+    ctx.data_folded       = data_folded;
+
+    map_table_init(out);
+
+    if (macho_parse_map(map, &ctx, out))
+        return -1;
+
+    if (out->count)
+        return 0;
+
+    sect = (const SECTION_64 *)(input->text_seg + 1);
+    for (i = 0; i < input->text_seg->nsects; i++) {
+        if (sect[i].addr < ctx.text_vmaddr || sect[i].addr - ctx.text_vmaddr >= text_size)
+            continue;
+
+        memcpy(name, sect[i].sectname, 16);
+        name[16] = 0;
+
+        if (map_table_add(out, name, sect[i].addr,
+                          (size_t)(sect[i].addr - ctx.text_vmaddr), sect[i].size))
+            return -1;
+    }
+
+    if (rebase_bytes && map_table_add(out, "(rebase table)", MAP_NO_SRC, text_size, rebase_bytes))
+        return -1;
+
+    if (data_folded) {
+        sect = (const SECTION_64 *)(input->data_seg + 1);
+        for (i = 0; i < input->data_seg->nsects; i++) {
+            if (sect[i].addr < ctx.data_vmaddr || sect[i].addr - ctx.data_vmaddr >= data_content_size)
+                continue;
+
+            memcpy(name, sect[i].sectname, 16);
+            name[16] = 0;
+
+            if (map_table_add(out,
+                              name,
+                              sect[i].addr,
+                              text_size + rebase_bytes + (size_t)(sect[i].addr - ctx.data_vmaddr),
+                              sect[i].size))
+                return -1;
+        }
+    }
+
+    return 0;
+}
+
+BUFFER exe_macho(const void *buf, size_t size, BUFFER map)
 {
     BUFFER         empty            = { NULL, 0 };
     BUFFER         output           = { NULL, 0 };
@@ -1125,6 +1193,10 @@ BUFFER exe_macho(const void *buf, size_t size)
     COMPRESSED_SIZES lz_sizes;
     MACHO_LIVE_LAYOUT layout;
 
+    MAP_TABLE         map_table;
+    SYMBOL_BIT_COUNT  bit_count = { NULL, NULL, 0 };
+    int               have_report = 0;
+
     uint64_t       new_sizeofcmds;
     uint64_t       new_ncmds;
     uint64_t       extra_segments;
@@ -1134,6 +1206,8 @@ BUFFER exe_macho(const void *buf, size_t size)
     if (parse_macho_input(buf, size, &input)) {
         return empty;
     }
+
+    map_table_init(&map_table);
 
     if (load_loader(&loader, "macho_loader")) {
         goto cleanup;
@@ -1234,8 +1308,21 @@ BUFFER exe_macho(const void *buf, size_t size)
         uint8_t     *arith_dest       = compress_scratch.buf + lz_dest_capacity;
         const size_t arith_dest_cap   = compress_scratch.size - lz_dest_capacity;
 
+        const size_t rebase_bytes = data_folded
+                                        ? data_rebase_count * sizeof(MACHO_DATA_REBASE)
+                                        : 0U;
+
+        if (build_macho_map_table(map, &input, rebase_bytes, data_content_size,
+                                  data_folded, &map_table) == 0 && map_table.count) {
+            map_table_sort(&map_table);
+            if (map_table_fill_gaps(&map_table, combined_raw_size) == 0 &&
+                map_table_make_tracker(&map_table, combined_raw_size, &bit_count) == 0)
+                have_report = 1;
+        }
+
         lz_sizes = lz_compress(lz_dest, lz_dest_capacity,
-                               combined_raw.buf, combined_raw_size);
+                               combined_raw.buf, combined_raw_size,
+                               have_report ? &bit_count : NULL);
         if ( ! lz_sizes.lz) {
             fprintf(stderr, "Error: LZ77 compression failed\n");
             goto cleanup;
@@ -1758,9 +1845,26 @@ BUFFER exe_macho(const void *buf, size_t size)
     printf("        __LINKEDIT fileoff       0x%llx\n", (unsigned long long)linkedit_fileoff);
     printf("        signature fileoff        0x%llx\n", (unsigned long long)code_limit);
 
+    if (have_report) {
+        const MAP_OUT_REGION regions[] = {
+            { "mach header + cmds", 0,                  cmds_end_offs,                          0 },
+            { "loader code",        loader_offs,        payload_offs - loader_offs,             0 },
+            { "compressed payload", payload_offs,       arith_encoded_size,                     1 },
+            { "__DATA_CONST",       data_const_fileoff, linkedit_fileoff - data_const_fileoff,  0 },
+            { "__LINKEDIT",         linkedit_fileoff,   code_limit - linkedit_fileoff,          0 },
+            { "signature",          code_limit,         sig_size,                               0 },
+        };
+
+        map_print_report(regions, sizeof(regions) / sizeof(regions[0]), &map_table, &bit_count);
+    }
+
     error = 0;
 
 cleanup:
+    if (have_report)
+        map_free_tracker(&bit_count);
+    map_table_free(&map_table);
+
     free(loader.bytes.buf);
     free(compress_scratch.buf);
     free(combined_raw.buf);

@@ -67,6 +67,37 @@ static int save_file(const char *filename, BUFFER buf)
     return EXIT_SUCCESS;
 }
 
+static BUFFER load_map_file(const char *input_path)
+{
+    BUFFER      buf    = { NULL, 0 };
+    char        path[sizeof(saved_filename)];
+    const char *dot    = strrchr(input_path, '.');
+    const char *slash  = strrchr(input_path, '/');
+    const char *bslash = strrchr(input_path, '\\');
+    size_t      input_path_size_without_ext;
+
+    if (bslash && ! slash)
+        slash = bslash;
+
+    if (dot && ( ! slash || dot > slash))
+        input_path_size_without_ext = (size_t)(dot - input_path);
+    else
+        input_path_size_without_ext = strlen(input_path);
+
+    if (input_path_size_without_ext + sizeof(".map") <= sizeof(path)) {
+
+        snprintf(path, sizeof(path), "%.*s.map", (int)input_path_size_without_ext, input_path);
+
+        buf = load_file(path, file_optional);
+        if ( ! buf.size) {
+            snprintf(path, sizeof(path), "%s.map", input_path);
+            buf = load_file(path, file_optional);
+        }
+    }
+
+    return buf;
+}
+
 int main(int argc, char *argv[])
 {
     COMPRESSED_SIZES compressed;
@@ -84,14 +115,16 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    buf = load_file(argv[1]);
+    buf = load_file(argv[1], file_mandatory);
     if ( ! buf.size)
         return EXIT_FAILURE;
 
     is_macho = is_macho_file(buf.buf, buf.size);
     if (is_macho || is_pe_file(buf.buf, buf.size)) {
         int    err    = EXIT_SUCCESS;
-        BUFFER output = is_macho ? exe_macho(buf.buf, buf.size) : exe_pe(buf.buf, buf.size);
+        BUFFER map    = load_map_file(argv[1]);
+        BUFFER output = is_macho ? exe_macho(buf.buf, buf.size, map)
+                                 : exe_pe(buf.buf, buf.size, map);
 
         if ( ! output.buf)
             err = EXIT_FAILURE;
@@ -107,6 +140,8 @@ int main(int argc, char *argv[])
             }
         }
 
+        if (map.buf)
+            free(map.buf);
         if (output.buf)
             free(output.buf);
         free(buf.buf);

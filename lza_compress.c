@@ -14,10 +14,26 @@
 #include <string.h>
 
 typedef struct {
-    BIT_EMITTER      emitter[LZS_NUM_STREAMS];
-    COMPRESSED_SIZES sizes;
-    uint8_t          prev_lit;
+    BIT_EMITTER       emitter[LZS_NUM_STREAMS];
+    COMPRESSED_SIZES  sizes;
+    SYMBOL_BIT_COUNT *symbols;
+    size_t            cur_symbol_idx;
+    uint8_t           prev_lit;
 } COMPRESS;
+
+static void track_compressed_bits(COMPRESS *compress, size_t pos, unsigned int bits)
+{
+    SYMBOL_BIT_COUNT *const symbols = compress->symbols;
+
+    if ( ! symbols)
+        return;
+
+    while (compress->cur_symbol_idx + 1 < symbols->num_symbols &&
+           pos >= symbols->symbol_starts[compress->cur_symbol_idx + 1])
+        ++compress->cur_symbol_idx;
+
+    symbols->symbol_bit_counts[compress->cur_symbol_idx] += bits;
+}
 
 static void init_compress(COMPRESS *compress, void *buf, size_t size)
 {
@@ -26,6 +42,8 @@ static void init_compress(COMPRESS *compress, void *buf, size_t size)
     uint32_t     i;
 
     memset(compress, 0, sizeof(*compress));
+
+    compress->symbols = NULL;
 
     for (i = 0; i < LZS_NUM_STREAMS; i++) {
         init_bit_emitter(&compress->emitter[i], dest, chunk_size);
@@ -75,7 +93,7 @@ enum PACKET_TYPE {
     TYPE_LONGREP3 = 0x1F    /* 11111 */
 };
 
-static void emit_type(COMPRESS *compress, enum PACKET_TYPE type)
+static unsigned int emit_type(COMPRESS *compress, enum PACKET_TYPE type)
 {
     unsigned int type_size = 1;
 
@@ -90,9 +108,11 @@ static void emit_type(COMPRESS *compress, enum PACKET_TYPE type)
     }
 
     emit_bits(&compress->emitter[LZS_TYPE], (size_t)type, type_size);
+
+    return type_size;
 }
 
-static void emit_length(BIT_EMITTER *emitter, size_t length)
+static unsigned int emit_length(BIT_EMITTER *emitter, size_t length)
 {
     /* Statistically, length tends to be mostly below 256, so few bits are needed to encode it
      *
@@ -108,18 +128,21 @@ static void emit_length(BIT_EMITTER *emitter, size_t length)
     if (length <= 9) {
         emit_bits(emitter, 0, 1);
         emit_bits(emitter, length - 2, 3);
+        return 1 + 3;
     }
     else if (length <= 17) {
         emit_bits(emitter, 2, 2);
         emit_bits(emitter, length - 10, 3);
+        return 2 + 3;
     }
     else {
         emit_bits(emitter, 3, 2);
         emit_bits(emitter, length - 18, LZA_LENGTH_TAIL_BITS);
+        return 2 + LZA_LENGTH_TAIL_BITS;
     }
 }
 
-static void emit_distance(BIT_EMITTER *emitter, size_t distance)
+static unsigned int emit_distance(BIT_EMITTER *emitter, size_t distance)
 {
     /* LZ77 variable-length distance encoding:
      * - 6-bit distance slot
@@ -145,8 +168,10 @@ static void emit_distance(BIT_EMITTER *emitter, size_t distance)
 
     --distance;
 
-    if (distance < 2)
+    if (distance < 2) {
         emit_bits(emitter, distance, 6);
+        return 6;
+    }
     else {
         const unsigned int bits_m1 = 31U - (unsigned int)count_leading_zeroes((unsigned int)distance);
 
@@ -155,10 +180,12 @@ static void emit_distance(BIT_EMITTER *emitter, size_t distance)
         distance |= (size_t)bits_m1 << bits_m1;
 
         emit_bits(emitter, distance, bits_m1 + 5);
+
+        return bits_m1 + 5;
     }
 }
 
-static void emit_literal(COMPRESS *compress, const uint8_t *buf, size_t size)
+static unsigned int emit_literal(COMPRESS *compress, const uint8_t *buf, size_t size)
 {
     const uint8_t *const end = buf + size;
 
@@ -171,6 +198,8 @@ static void emit_literal(COMPRESS *compress, const uint8_t *buf, size_t size)
 
         emit_bits(&compress->emitter[LZS_LITERAL], lit, 7);
     } while (++buf < end);
+
+    return (unsigned int)size * 8U;
 }
 
 static void report_literal(void *cookie, const uint8_t *buf, size_t pos, size_t size)
@@ -178,8 +207,12 @@ static void report_literal(void *cookie, const uint8_t *buf, size_t pos, size_t 
     COMPRESS *const compress = (COMPRESS *)cookie;
 
     do {
-        emit_type(compress, TYPE_LIT);
-        emit_literal(compress, &buf[pos], 1);
+        unsigned int bits = emit_type(compress, TYPE_LIT);
+
+        bits += emit_literal(compress, &buf[pos], 1);
+
+        track_compressed_bits(compress, pos, bits);
+
         ++pos;
         --size;
     } while (size);
@@ -188,6 +221,7 @@ static void report_literal(void *cookie, const uint8_t *buf, size_t pos, size_t 
 static void report_match(void *cookie, const uint8_t *buf, size_t pos, OCCURRENCE occurrence)
 {
     COMPRESS *const compress = (COMPRESS *)cookie;
+    unsigned int    bits;
 
     assert(occurrence.length <= MAX_LZA_SIZE);
 
@@ -195,16 +229,16 @@ static void report_match(void *cookie, const uint8_t *buf, size_t pos, OCCURRENC
 
         assert(occurrence.length > 1);
 
-        emit_type(compress, TYPE_MATCH);
+        bits  = emit_type(compress, TYPE_MATCH);
 
-        emit_length(&compress->emitter[LZS_SIZE], occurrence.length);
+        bits += emit_length(&compress->emitter[LZS_SIZE], occurrence.length);
 
-        emit_distance(&compress->emitter[LZS_OFFSET], occurrence.distance);
+        bits += emit_distance(&compress->emitter[LZS_OFFSET], occurrence.distance);
     }
     else if (occurrence.length == 1) {
         assert(occurrence.last == 0);
 
-        emit_type(compress, TYPE_SHORTREP);
+        bits = emit_type(compress, TYPE_SHORTREP);
     }
     else {
         enum PACKET_TYPE type;
@@ -218,10 +252,12 @@ static void report_match(void *cookie, const uint8_t *buf, size_t pos, OCCURRENC
                 type = TYPE_LONGREP0;
         }
 
-        emit_type(compress, type);
+        bits  = emit_type(compress, type);
 
-        emit_length(&compress->emitter[LZS_SIZE], occurrence.length);
+        bits += emit_length(&compress->emitter[LZS_SIZE], occurrence.length);
     }
+
+    track_compressed_bits(compress, pos, bits);
 }
 
 static size_t emit_header(uint8_t *dest, size_t dest_size, const size_t stream_sizes[])
@@ -245,10 +281,11 @@ size_t estimate_compress_size(size_t src_size)
     return src_size * LZS_NUM_STREAMS * 2;
 }
 
-COMPRESSED_SIZES lz_compress(void       *dest,
-                             size_t      dest_size,
-                             const void *src,
-                             size_t      src_size)
+COMPRESSED_SIZES lz_compress(void             *dest,
+                             size_t            dest_size,
+                             const void       *src,
+                             size_t            src_size,
+                             SYMBOL_BIT_COUNT *symbols)
 {
     COMPRESS compress;
     size_t   stream_sizes[LZS_NUM_STREAMS];
@@ -258,6 +295,8 @@ COMPRESSED_SIZES lz_compress(void       *dest,
     assert(dest_size >= src_size);
 
     init_compress(&compress, dest, dest_size);
+
+    compress.symbols = symbols;
 
     if (find_repeats((const uint8_t *)src, src_size, report_literal, report_match, &compress)) {
         memset(&compress.sizes, 0, sizeof(compress.sizes));
@@ -292,7 +331,7 @@ COMPRESSED_SIZES lza_compress(void       *dest,
 
     assert(half_size >= src_size);
 
-    compressed = lz_compress(arith_input, half_size, src, src_size);
+    compressed = lz_compress(arith_input, half_size, src, src_size, NULL);
 
     if (compressed.lz == 0)
         return compressed;

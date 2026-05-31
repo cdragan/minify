@@ -18,6 +18,9 @@ minify_src_files += lz_decompress.c
 minify_src_files += lza_compress.c
 minify_src_files += lza_decompress.c
 minify_src_files += macho_sign.c
+minify_src_files += map_exe.c
+minify_src_files += map_macho.c
+minify_src_files += map_pe.c
 minify_src_files += minify.c
 minify_src_files += sha256.c
 

@@ -4,4 +4,9 @@
 
 #include "buffer.h"
 
-BUFFER load_file(const char *filename);
+enum FILE_EXISTENCE {
+    file_optional,
+    file_mandatory
+};
+
+BUFFER load_file(const char *filename, enum FILE_EXISTENCE existence);

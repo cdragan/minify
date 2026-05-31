@@ -25,7 +25,7 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    buf = load_file(argv[1]);
+    buf = load_file(argv[1], file_mandatory);
     if ( ! buf.size)
         return EXIT_FAILURE;
 
