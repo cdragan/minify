@@ -25,7 +25,7 @@ jobs:
       - name: Remove link.exe from MSYS2
         shell: msys2 {0}
         run: rm -f /bin/link.exe
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v6
       - name: Build loaders
         shell: cmd
         run: |
@@ -45,7 +45,7 @@ jobs:
           ls -l changed || true
       - name: Upload changed loaders
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: loaders-windows-${{ matrix.compiler }}-${{ matrix.arch }}
           path: changed
@@ -54,7 +54,7 @@ jobs:
   macos:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v6
       - name: Build loaders
         run: make build_loaders release=1
       - name: Collect changed loader
@@ -66,7 +66,7 @@ jobs:
           ls -l changed || true
       - name: Upload changed loader
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: loaders-macos-arm64
           path: changed
