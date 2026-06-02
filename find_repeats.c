@@ -132,7 +132,7 @@ static void set_offset(const uint8_t *buf, size_t pos, OFFSET_MAP *map)
     map->pair_ids[idx] = new_id;
 }
 
-/* Append distance to the list of last 4 distances, without duplicates */
+/* Append distance to the list of last 4 distances, without duplicates. */
 static void update_last4(uint32_t last_dist[], uint32_t distance)
 {
     int i;
@@ -148,277 +148,152 @@ static void update_last4(uint32_t last_dist[], uint32_t distance)
     last_dist[0] = distance;
 }
 
-static uint32_t compare(const uint8_t *buf, size_t left_pos, size_t right_pos, size_t size)
+static uint32_t calc_match_length(const uint8_t *buf, size_t left, size_t right, size_t size)
 {
-    const uint8_t *left      = &buf[left_pos];
-    const uint8_t *right     = &buf[right_pos];
-    const uint32_t right_end = (uint32_t)(size - right_pos);
-    const uint32_t end       = (right_end > MAX_LZA_SIZE) ? MAX_LZA_SIZE : right_end;
-    uint32_t       length    = 2;
+    size_t   max = size - right;
+    uint32_t match_length = 0;
 
-    assert(left[0] == right[0]);
-    assert(left[1] == right[1]);
+    if (max > MAX_LZA_SIZE)
+        max = MAX_LZA_SIZE;
 
-    while ((length < end) && (left[length] == right[length]))
-        ++length;
+    while (match_length < max && buf[left + match_length] == buf[right + match_length])
+        ++match_length;
 
-    return length;
+    return match_length;
 }
 
-static int calc_match_score(OCCURRENCE occ)
+static uint32_t calc_length_bits(uint32_t length)
 {
-    /* Number of bits if this was emitted as LIT packets (literals) */
-    const int lit_bits = 9 * (int)occ.length;
+    if (length <= 9)
+        return 1 + 3;
 
-    /* Number of bits if this was emitted as MATCH packet */
-    const int match_hdr_bits = 2;
-    const int length_bits    = (occ.length <= 9) ? 4 : (occ.length <= 17) ? 5 : (2 + LZA_LENGTH_TAIL_BITS);
-    const int distance_bits  = (occ.distance <= 2) ? 6 : (36 - count_leading_zeroes((unsigned int)(occ.distance - 1)));
-    const int match_bits     = match_hdr_bits + length_bits + distance_bits;
+    if (length <= 17)
+        return 2 + 3;
 
-    return lit_bits - match_bits;
+    return 2 + LZA_LENGTH_TAIL_BITS;
 }
 
-static int calc_longrep_score(OCCURRENCE occ)
+static uint32_t calc_distance_bits(uint32_t distance)
 {
-    /* Number of bits if this was emitted as LIT packets (literals) */
-    const int lit_bits = 9 * (int)occ.length;
+    --distance;
 
-    /* Number of bits if this was emitted as LONGREP* packet */
-    const int longrep_hdr_bits = (occ.last < 2) ? 4 : 5;
-    const int length_bits      = (occ.length <= 9) ? 4 : (occ.length <= 17) ? 5 : (2 + LZA_LENGTH_TAIL_BITS);
-    const int longrep_bits     = longrep_hdr_bits + length_bits;
+    if (distance < 2)
+        return 6;
 
-    return lit_bits - longrep_bits;
+    return (31U - (uint32_t)count_leading_zeroes(distance)) + 5;
 }
 
-static int calc_cond_longrep_score(OCCURRENCE occ)
-{
-    return occ.last < 0 ? 0 : calc_longrep_score(occ);
-}
+/* Static per-packet bit costs. */
+#define LIT_BITS      9     /* 1 type bit + 1 literal MSB bit + 7 literal bits */
+#define MATCH_BITS    2
+#define SHORTREP_BITS 4
+#define INFINITE_COST (~0U)
 
-static int is_8_byte_aligned(const uint8_t *ptr)
-{
-    return ! ((uintptr_t)ptr & 7U);
-}
-
-/* Determine length of a region filled with the same byte value */
-static size_t get_repeated_byte_length(const uint8_t *buf, size_t pos, size_t size)
-{
-    size_t        length = 1;
-    const uint8_t byte   = buf[pos];
-
-    assert(pos + 1 < size);
-
-    buf  += pos + 1;
-    size -= pos + 1;
-
-    /* Check the beginning byte by byte until we hit aligned address */
-    while (length < size && *buf == byte && ! is_8_byte_aligned(buf)) {
-        ++length;
-        ++buf;
-    }
-
-    /* Check 8 bytes at a time (perf optimization) */
-    if (*buf == byte) {
-        size_t         next_length = length + 8;
-        const uint64_t qword       = 0x0101010101010101ULL * (uint64_t)byte;
-
-        while (next_length <= size && *(uint64_t *)buf == qword) {
-            length       = next_length;
-            next_length += 8;
-            buf         += 8;
-        }
-    }
-
-    /* Check one byte at a time until we find a byte that does not match */
-    while (length < size && *buf == byte) {
-        ++length;
-        ++buf;
-    }
-
-    return length;
-}
-
-static OCCURRENCE find_occurrence_at_last_dist(const uint8_t *buf,
-                                               size_t         pos,
-                                               size_t         size,
-                                               const uint32_t last_dist[])
-{
-    OCCURRENCE occurrence = { 0, 0, -1 };
-    int        last;
-
-    for (last = 3; last >= 0; last--) {
-        const uint32_t distance = last_dist[last];
-        uint32_t       length;
-
-        if ( ! distance)
-            continue;
-
-        if (buf[pos - distance] != buf[pos])
-            continue;
-        if (buf[pos - distance + 1] != buf[pos + 1])
-            continue;
-
-        length = compare(buf, pos - distance, pos, size);
-
-        if (length >= occurrence.length) {
-            occurrence.distance = distance;
-            occurrence.length   = length;
-            occurrence.last     = last;
-        }
-    }
-
-    return occurrence;
-}
-
-/* Check if this match has some bytes following that could be used for *REP.
- * Returns the number of LITs between the match and the potential *REP.
+/* Maximum number of subsequent lengths attempted to be encoded when searching
+ * for the optimal packet layout to minimize the output.
+ * Longer lengths typically buy us nothing except slowing down compression.
  */
-static uint32_t check_trailing_rep(const uint8_t *buf,
-                                   size_t         pos,
-                                   size_t         size,
-                                   OCCURRENCE     occ)
+#define MAX_FINE_LENGTH 128
+
+/* Limit for searching for matches.  Increasing this could gain a few bytes
+ * in the compressed output trading off increased compression time.
+ */
+#define MAX_CHAIN_DEPTH 256
+
+enum PACKET_KIND {
+    PACKET_LIT,
+    PACKET_MATCH,
+    PACKET_REP
+};
+
+/* We model the compression as a graph.  Each node is a byte position in the input.
+ * Edges are different compressed packets (LIT, MATCH, REP).  We can then optimize
+ * the compression and find the best combination of packets which yields the smallest
+ * compressed output.  To do this, we remember bit cost to reach each node, so we can
+ * select better combinations of packets when we find them.
+ */
+typedef struct {
+    uint32_t cost;         /* min bits to encode the input up to this position        */
+    uint32_t from_pos;     /* start of the packet that reaches here (backtrack)       */
+    uint32_t next_pos;     /* next position on the chosen path (set in backtrack)     */
+    uint32_t packet_dist;  /* distance of that packet (for PACKET_MATCH/PACKET_REP)   */
+    uint32_t reps[4];      /* the 4 most recent distances along the best path         */
+    uint32_t run_length;   /* run of identical bytes starting here (precomputed)      */
+    uint8_t  kind;         /* enum PACKET_KIND of that packet                         */
+    uint8_t  last;         /* rep index 0..3 for PACKET_REP (matches OCCURRENCE.last) */
+} NODE;
+
+static void consider_packet(NODE           *nodes,
+                            size_t          to,
+                            uint32_t        cost,
+                            size_t          from,
+                            uint8_t         kind,
+                            uint32_t        dist,
+                            uint8_t         last,
+                            const uint32_t  new_reps[4])
 {
-    const size_t left              = pos - occ.distance + occ.length;
-    const size_t right             = pos + occ.length;
-    const size_t bytes_after_match = size - right;
-    uint32_t     i;
+    NODE *const node = &nodes[to];
 
-    for (i = 1; i <= 3; i++) {
-        if (bytes_after_match <= i)
-            break;
+    if (cost >= node->cost)
+        return;
 
-        if (buf[left + i] == buf[right + i])
-            return i;
-    }
+    node->cost        = cost;
+    node->from_pos    = (uint32_t)from;
+    node->packet_dist = dist;
+    node->kind        = kind;
+    node->last        = last;
 
-    return 0;
+    node->reps[0] = new_reps[0];
+    node->reps[1] = new_reps[1];
+    node->reps[2] = new_reps[2];
+    node->reps[3] = new_reps[3];
 }
 
-static OCCURRENCE find_longest_occurrence(const uint8_t    *buf,
-                                          size_t            pos,
-                                          size_t            size,
-                                          const uint32_t    last_dist[],
-                                          const OFFSET_MAP *map)
+/* Considers a found match, to see if it can produce shorter output
+ * (shorter path through position node graph).  Multiple lengths are considered
+ * starting at length 2 and up, because sometimes sacrificing one length can
+ * lead to shorter rep packets afterwards.
+ */
+static void consider_match(NODE           *nodes,
+                           size_t          pos,
+                           uint32_t        base,
+                           uint32_t        max_len,
+                           uint32_t        type_bits,
+                           uint32_t        dist_bits,
+                           uint8_t         kind,
+                           uint32_t        dist,
+                           uint8_t         last,
+                           const uint32_t  new_reps[4])
 {
-    OCCURRENCE   occurrence      = find_occurrence_at_last_dist(buf, pos, size, last_dist);
-    int          score           = calc_cond_longrep_score(occurrence);
-    const size_t repeated_length = get_repeated_byte_length(buf, pos, size);
-    uint32_t     trailing_rep    = occurrence.distance ?
-                    check_trailing_rep(buf, pos, size, occurrence) : 0;
+    uint32_t length;
+    uint32_t fine = (max_len > MAX_FINE_LENGTH) ? MAX_FINE_LENGTH : max_len;
 
-    uint32_t chunk_id = map->pair_ids[get_map_idx(buf, pos)];
+    for (length = 2; length <= fine; length++)
+        consider_packet(nodes,
+                        pos + length,
+                        base + type_bits + calc_length_bits(length) + dist_bits,
+                        pos, kind, dist, last, new_reps);
 
-    while (chunk_id != INVALID_ID) {
-        const LOCATION_CHUNK *chunk = &map->chunks[chunk_id];
-        uint32_t              i;
-
-        for (i = 0; i < MAX_OFFSETS; i++) {
-            OCCURRENCE occ;
-            int        cur_score;
-            uint32_t   cur_trailing_rep;
-
-            const uint32_t old_pos = chunk->offset[i];
-            if (old_pos == INVALID_ID)
-                continue;
-
-            occ.length   = compare(buf, old_pos, pos, size);
-            occ.distance = (uint32_t)pos - old_pos;
-
-            /* For repeated bytes, we only store the offset of the first pair,
-             * so try to find shorter distance.
-             */
-            if (occ.length <= repeated_length && occ.distance > 1) {
-                const size_t max_len = get_repeated_byte_length(buf, pos - occ.distance, size);
-
-                if (max_len > occ.length) {
-                    const uint32_t diff = (uint32_t)(max_len - occ.length);
-
-                    if (diff < occ.distance)
-                        occ.distance -= diff;
-                    else
-                        occ.distance = 1;
-
-                    /* Recalculate length in case other bytes after the repeated
-                     * span can match.
-                     */
-                    occ.length = compare(buf, pos - occ.distance, pos, size);
-                }
-            }
-
-            for (occ.last = 3; occ.last >= 0; occ.last--)
-                if (occ.distance == last_dist[occ.last])
-                    break;
-
-            /* Last distances already processed */
-            if (occ.last >= 0)
-                continue;
-
-            cur_score = calc_match_score(occ);
-
-            /* Prefer distances which encourage the use of subsequent SHORTREP */
-            cur_trailing_rep = check_trailing_rep(buf, pos, size, occ);
-
-            if (cur_trailing_rep) {
-                if (cur_score < score)
-                    continue;
-                if (trailing_rep && cur_trailing_rep > trailing_rep && cur_score <= score)
-                    continue;
-            }
-            else if (cur_score <= score)
-                continue;
-
-            if (cur_score < 2)
-                continue;
-
-            if (occ.length == 3 && occ.distance > (1U << 11))
-                continue;
-
-            if (occ.length == 4 && occ.distance > (1U << 13))
-                continue;
-
-            occurrence   = occ;
-            score        = cur_score;
-            trailing_rep = cur_trailing_rep;
-        }
-
-        chunk_id = chunk->next_id;
-    }
-
-    return occurrence;
+    if (max_len > MAX_FINE_LENGTH)
+        consider_packet(nodes,
+                        pos + max_len,
+                        base + type_bits + calc_length_bits(max_len) + dist_bits,
+                        pos, kind, dist, last, new_reps);
 }
 
-static void report_literal_or_single_match(const uint8_t *buf,
-                                           size_t         pos,
-                                           size_t         size,
-                                           uint32_t       last_dist,
-                                           REPORT_LITERAL report_literal,
-                                           REPORT_MATCH   report_match,
-                                           void          *cookie)
+static void push_rep_distance(const uint32_t cur_reps[4], uint32_t dist, uint32_t out[4])
 {
-    size_t       num_literal = 0;
-    const size_t end         = pos + size;
+    out[0] = cur_reps[0];
+    out[1] = cur_reps[1];
+    out[2] = cur_reps[2];
+    out[3] = cur_reps[3];
 
-    for ( ; pos < end; ++pos) {
-        if (last_dist && buf[pos] == buf[pos - last_dist]) {
-            OCCURRENCE occurrence = { last_dist, 1, 0 };
-
-            if (num_literal) {
-                report_literal(cookie, buf, pos - num_literal, num_literal);
-                num_literal = 0;
-            }
-
-            report_match(cookie, buf, pos, occurrence);
-        }
-        else
-            ++num_literal;
-    }
-
-    if (num_literal)
-        report_literal(cookie, buf, pos - num_literal, num_literal);
+    update_last4(out, dist);
 }
 
+/* Compresses buf into the smallest sequence of LIT/MATCH/REP packets and
+ * reports each one through the callbacks.
+ */
 int find_repeats(const uint8_t *buf,
                  size_t         size,
                  REPORT_LITERAL report_literal,
@@ -426,9 +301,9 @@ int find_repeats(const uint8_t *buf,
                  void          *cookie)
 {
     OFFSET_MAP *map;
-    size_t      pos          = 0;
-    size_t      num_literal  = 0;
-    uint32_t    last_dist[4] = { 0, 0, 0, 0 };
+    NODE       *nodes = NULL;  /* one search node per byte position */
+    size_t      pos;
+    int         ret = 1;
 
     if ( ! size)
         return 0;
@@ -437,71 +312,181 @@ int find_repeats(const uint8_t *buf,
     if ( ! map)
         return 1;
 
-    /* Find subsequent matches as long as we have at least two consecutive bytes */
-    while (pos + 1 < size) {
-        OCCURRENCE occurrence = find_longest_occurrence(buf, pos, size, last_dist, map);
-        uint32_t   i;
+    nodes = (NODE *)malloc((size + 1) * sizeof(NODE));
+    if ( ! nodes) {
+        perror(NULL);
+        goto cleanup;
+    }
 
-        if ( ! occurrence.length) {
-            set_offset(buf, pos, map);
-            ++pos;
-            ++num_literal;
+    /* All positions except 0 are initialized to INFINITE_COST (unreachable) */
+    memset(nodes, 0xFF, (size + 1) * sizeof(NODE));
+    nodes[0].cost    = 0;
+    nodes[0].reps[0] = 0;
+    nodes[0].reps[1] = 0;
+    nodes[0].reps[2] = 0;
+    nodes[0].reps[3] = 0;
+
+    /* Precompute number of consecutive identical bytes at each position */
+    nodes[size - 1].run_length = 1;
+    for (pos = size - 1; pos-- > 0; )
+        nodes[pos].run_length = (buf[pos] == buf[pos + 1]) ? nodes[pos + 1].run_length + 1 : 1;
+
+    /* Find optimal layout of compression packets, which is an optimal path through
+     * the graph of position nodes.
+     */
+    for (pos = 0; pos < size; pos++) {
+        const uint32_t  base     = nodes[pos].cost;
+        const uint32_t *cur_reps = nodes[pos].reps;
+        uint32_t        new_reps[4];
+        uint32_t        chunk_id;
+        uint32_t        depth;
+        int             rep_idx;
+
+        assert(base != INFINITE_COST);
+
+        consider_packet(nodes, pos + 1, base + LIT_BITS, pos, PACKET_LIT, 0, 0, cur_reps);
+
+        /* Encode reps for the 4 most recent distances */
+        for (rep_idx = 0; rep_idx < 4; rep_idx++) {
+            const uint32_t dist = cur_reps[rep_idx];
+            uint32_t       match_length;
+
+            if ( ! dist || (size_t)dist > pos)
+                continue;
+
+            match_length = calc_match_length(buf, pos - dist, pos, size);
+            if ( ! match_length)
+                continue;
+
+            push_rep_distance(cur_reps, dist, new_reps);
+
+            /* SHORTREP encodes length 1 against the most recent distance */
+            if (rep_idx == 0)
+                consider_packet(nodes, pos + 1, base + SHORTREP_BITS, pos, PACKET_REP, dist, 0, new_reps);
+
+            if (match_length >= 2)
+                consider_match(nodes, pos, base, match_length,
+                               (rep_idx < 2) ? 4 : 5, 0, PACKET_REP, dist, (uint8_t)rep_idx, new_reps);
+        }
+
+        /* Last position cannot start a match */
+        if (pos + 1 >= size)
             continue;
+
+        /* Try to encode a distance-1 run (repeated byte) as a plain match, unless it is
+         * already one of the rep distances (already handled above more cheaply).
+         */
+        if (pos >= 1 &&
+            buf[pos] == buf[pos - 1] &&
+            cur_reps[0] != 1 &&
+            cur_reps[1] != 1 &&
+            cur_reps[2] != 1 &&
+            cur_reps[3] != 1) {
+
+            uint32_t match_length = nodes[pos].run_length;
+            if (match_length > MAX_LZA_SIZE)
+                match_length = MAX_LZA_SIZE;
+
+            push_rep_distance(cur_reps, 1, new_reps);
+            consider_match(nodes, pos, base, match_length,
+                           MATCH_BITS, calc_distance_bits(1), PACKET_MATCH, 1, 0, new_reps);
         }
 
-        /* See if we can find a better match */
-        if ((occurrence.last < 0) && (pos + 2 < size)) {
+        /* Try to encode matches which aren't covered by reps */
+        chunk_id = map->pair_ids[get_map_idx(buf, pos)];
+        depth    = 0;
 
-            const OCCURRENCE next_occurrence = find_occurrence_at_last_dist(buf, pos + 1, size, last_dist);
+        while (chunk_id != INVALID_ID && depth < MAX_CHAIN_DEPTH) {
+            const LOCATION_CHUNK *chunk = &map->chunks[chunk_id];
+            uint32_t              j;
 
-            if (next_occurrence.last >= 0) {
-                const int cur_score  = calc_match_score(occurrence);
-                const int next_score = calc_longrep_score(next_occurrence);
+            for (j = 0; j < MAX_OFFSETS; j++) {
+                const uint32_t old_pos = chunk->offset[j];
+                uint32_t       dist;
+                uint32_t       match_length;
 
-                /* If it is beneficial, report the current byte as LIT(eral) and start match from
-                 * the next byte */
-                if (next_score >= cur_score) {
-                    set_offset(buf, pos, map);
-                    ++pos;
-                    ++num_literal;
+                if (old_pos == INVALID_ID)
+                    continue;
 
-                    occurrence = next_occurrence;
-                }
+                dist = (uint32_t)pos - old_pos;
+
+                /* Skip reps as they were already considered earlier */
+                if (dist == 1 ||
+                    dist == cur_reps[0] ||
+                    dist == cur_reps[1] ||
+                    dist == cur_reps[2] ||
+                    dist == cur_reps[3])
+                    continue;
+
+                match_length = calc_match_length(buf, old_pos, pos, size);
+                if (match_length < 2)
+                    continue;
+
+                push_rep_distance(cur_reps, dist, new_reps);
+                consider_match(nodes, pos, base, match_length,
+                               MATCH_BITS, calc_distance_bits(dist), PACKET_MATCH, dist, 0, new_reps);
+
+                if (++depth >= MAX_CHAIN_DEPTH)
+                    break;
             }
+
+            chunk_id = chunk->next_id;
         }
 
-        if (num_literal) {
-            report_literal_or_single_match(buf, pos - num_literal, num_literal, last_dist[0],
-                                           report_literal, report_match, cookie);
-            num_literal = 0;
-        }
-
-        assert(occurrence.distance > 0);
-
-        report_match(cookie, buf, pos, occurrence);
-
-        update_last4(last_dist, occurrence.distance);
-        occurrence.last = 0;
-
-        /* Update lookup table with byte pair at every position */
-        for (i = 0; i < occurrence.length; ++i) {
-            if (pos + 1 < size)
-                set_offset(buf, pos, map);
-            ++pos;
-        }
+        set_offset(buf, pos, map);
     }
 
-    if (pos < size) {
-        assert(pos + 1 == size);
-        ++num_literal;
-        ++pos;
+    /* Build a forward chain of packets by reversing the optimal reverse path
+     * computed above.
+     */
+    for (pos = size; pos != 0; ) {
+        const size_t from = nodes[pos].from_pos;
+        nodes[from].next_pos = (uint32_t)pos;
+        pos = from;
     }
 
-    if (num_literal)
-        report_literal_or_single_match(buf, pos - num_literal, num_literal, last_dist[0],
-                                       report_literal, report_match, cookie);
+    /* Encode packets */
+    {
+        size_t from      = 0;
+        size_t lit_start = 0;
+        size_t lit_count = 0;
 
+        while (from != size) {
+            const size_t   end          = nodes[from].next_pos;
+            const uint32_t match_length = (uint32_t)(end - from);
+
+            if (nodes[end].kind == PACKET_LIT) {
+                if ( ! lit_count)
+                    lit_start = from;
+                lit_count += match_length;
+            }
+            else {
+                OCCURRENCE occurrence;
+
+                if (lit_count) {
+                    report_literal(cookie, buf, lit_start, lit_count);
+                    lit_count = 0;
+                }
+
+                occurrence.distance = nodes[end].packet_dist;
+                occurrence.length   = match_length;
+                occurrence.last     = (nodes[end].kind == PACKET_REP) ? nodes[end].last : -1;
+
+                report_match(cookie, buf, from, occurrence);
+            }
+
+            from = end;
+        }
+
+        if (lit_count)
+            report_literal(cookie, buf, lit_start, lit_count);
+    }
+
+    ret = 0;
+
+cleanup:
+    free(nodes);
     free(map);
 
-    return 0;
+    return ret;
 }
