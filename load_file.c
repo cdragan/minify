@@ -87,7 +87,12 @@ const char *get_exe_dir(void)
         return exe_dir;
 
 #if defined(_WIN32)
-    GetModuleFileNameA(NULL, exe_dir, (DWORD)sizeof(exe_dir));
+    {
+        const DWORD len = GetModuleFileNameA(NULL, exe_dir, (DWORD)sizeof(exe_dir));
+
+        if (len == 0 || len >= (DWORD)sizeof(exe_dir))
+            exe_dir[0] = 0;
+    }
 #elif defined(__APPLE__)
     {
         uint32_t buf_size = (uint32_t)sizeof(exe_dir);

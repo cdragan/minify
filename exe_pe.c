@@ -892,7 +892,7 @@ cleanup:
 }
 
 static BUFFER add_mini_import_dir(BUFFER    output,
-                                  uint32_t  import_dir_rva,
+                                  uint32_t  block_base_rva,
                                   uint16_t  pe_format,
                                   uint32_t *out_import_table_offs,
                                   uint32_t *out_iat_offs)
@@ -924,8 +924,8 @@ static BUFFER add_mini_import_dir(BUFFER    output,
     /* Fill import directory entry */
     import_dir = (IMPORT_DIR_ENTRY *)buf_at_offset(output, dir_offs, dir_size);
 
-    import_dir->name_rva                 = make_uint32_le(import_dir_rva + kernel_offs);
-    import_dir->import_address_table_rva = make_uint32_le(import_dir_rva + iat_offs);
+    import_dir->name_rva                 = make_uint32_le(block_base_rva + kernel_offs);
+    import_dir->import_address_table_rva = make_uint32_le(block_base_rva + iat_offs);
 
     /* Fill import address table */
     iat = (uint32_le *)buf_at_offset(output, iat_offs, iat_size);
@@ -935,12 +935,12 @@ static BUFFER add_mini_import_dir(BUFFER    output,
      * minus 2.  We don't care about the actual value of the ordinal, it's just a hint.
      */
     if (pe_format == PE_FORMAT_PE32) {
-        iat[0] = make_uint32_le(import_dir_rva + load_lib_offs - 2);
-        iat[1] = make_uint32_le(import_dir_rva + get_proc_offs - 2);
+        iat[0] = make_uint32_le(block_base_rva + load_lib_offs - 2);
+        iat[1] = make_uint32_le(block_base_rva + get_proc_offs - 2);
     }
     else {
-        iat[0] = make_uint32_le(import_dir_rva + load_lib_offs - 2);
-        iat[2] = make_uint32_le(import_dir_rva + get_proc_offs - 2);
+        iat[0] = make_uint32_le(block_base_rva + load_lib_offs - 2);
+        iat[2] = make_uint32_le(block_base_rva + get_proc_offs - 2);
     }
 
     /* Copy strings */

@@ -16,7 +16,8 @@
 
 /* The no-CRT stub flags compile this translation unit as C++ (-TP).  Force C linkage
  * so the kernel32 imports resolve against the C-decorated kernel32.lib symbols rather
- * than being name-mangled, and so -entry:start matches the undecorated entry symbol. */
+ * than being name-mangled.  The entry is C-decorated too (x86: _start@0, x64: start);
+ * the linker resolves -entry:start to it. */
 #ifdef __cplusplus
 extern "C" {
 #endif

@@ -48,11 +48,28 @@ pe_lza_decompress_sources += pe_lza_decompress.c
 # Determine target OS
 
 UNAME = $(shell uname -s)
-ARCH ?= $(shell uname -m)
 
 ifneq (,$(filter CYGWIN% MINGW% MSYS%, $(UNAME)))
     # Note: Still use cl.exe on Windows
     UNAME = Windows
+endif
+
+ifeq ($(UNAME), Windows)
+    ifneq (,$(VSCMD_ARG_TGT_ARCH))
+        ARCH ?= $(VSCMD_ARG_TGT_ARCH)
+    endif
+endif
+
+ARCH ?= $(shell uname -m)
+
+ifneq (,$(filter x86_64 amd64 AMD64, $(ARCH)))
+    override ARCH := x64
+endif
+
+ifeq ($(UNAME), Windows)
+    ifeq (,$(filter x86 x64, $(ARCH)))
+        $(error On Windows ARCH must be x86 or x64, got '$(ARCH)')
+    endif
 endif
 
 # macho_loader uses arm64 syscall asm; it only compiles on macOS arm64.
