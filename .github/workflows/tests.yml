@@ -41,16 +41,3 @@ jobs:
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.arch }}
           msys2 -c "ARCH=${{ matrix.arch }} ./runtests"
-      - name: Debug packed crash
-        if: always()
-        shell: cmd
-        run: |
-          set "EXE=Out\release\pe_run_test\mini.pe_test.exe"
-          if not exist "%EXE%" set "EXE=Out\debug\pe_run_test\mini.pe_test.exe"
-          if not exist "%EXE%" (echo No packed exe found & exit /b 0)
-          set "CDB=C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe"
-          if not exist "%CDB%" for /f "delims=" %%i in ('where /R "C:\Program Files (x86)\Windows Kits" cdb.exe 2^>nul') do set "CDB=%%i"
-          if not exist "%CDB%" (echo cdb.exe not found & exit /b 0)
-          echo Debugging "%EXE%" with "%CDB%"
-          "%CDB%" -G -c "sxi 4000001f; g; .lastevent; r; lm; kb; q" "%EXE%"
-          exit /b 0
