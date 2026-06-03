@@ -753,7 +753,7 @@ static int load_loader(LOADER_BLOB *out, const char *loader_name)
         goto cleanup;
     }
 
-    blob = buf_alloc(blob_end - blob_start);
+    blob = buf_alloc((size_t)(blob_end - blob_start));
     if ( ! blob.buf) {
         fprintf(stderr, "Error: OOM extracting loader '%s'\n", loader_name);
         goto cleanup;
@@ -1066,7 +1066,7 @@ static int build_macho_map_table(BUFFER             map,
                                  MAP_TABLE         *out)
 {
     MACHO_MAP_CONTEXT ctx;
-    const size_t      text_size = input->text_seg->filesize;
+    const size_t      text_size = (size_t)input->text_seg->filesize;
     const SECTION_64 *sect;
     uint32_t          i;
     char              name[17];
@@ -1096,7 +1096,7 @@ static int build_macho_map_table(BUFFER             map,
         name[16] = 0;
 
         if (map_table_add(out, name, sect[i].addr,
-                          (size_t)(sect[i].addr - ctx.text_vmaddr), sect[i].size))
+                          (size_t)(sect[i].addr - ctx.text_vmaddr), (size_t)sect[i].size))
             return -1;
     }
 
@@ -1116,7 +1116,7 @@ static int build_macho_map_table(BUFFER             map,
                               name,
                               sect[i].addr,
                               text_size + rebase_bytes + (size_t)(sect[i].addr - ctx.data_vmaddr),
-                              sect[i].size))
+                              (size_t)sect[i].size))
                 return -1;
         }
     }
@@ -1261,7 +1261,7 @@ BUFFER exe_macho(const void *buf, size_t size, BUFFER map)
         const uint32_t rebase_bytes = data_folded
                                           ? data_rebase_count * (uint32_t)sizeof(MACHO_DATA_REBASE)
                                           : 0U;
-        const size_t   text_size    = input.text_seg->filesize;
+        const size_t   text_size    = (size_t)input.text_seg->filesize;
 
         combined_raw_size = text_size + rebase_bytes + data_content_size;
         combined_raw      = buf_alloc(combined_raw_size);
@@ -1465,7 +1465,7 @@ BUFFER exe_macho(const void *buf, size_t size, BUFFER map)
 
     /* Allocate output buffer and write everything. */
     {
-        const uint64_t out_size = code_limit + sig_size;
+        const size_t out_size = (size_t)(code_limit + sig_size);
         output = buf_alloc(out_size);
         if ( ! output.buf) {
             fprintf(stderr, "Error: OOM output buffer\n");
@@ -1707,7 +1707,7 @@ BUFFER exe_macho(const void *buf, size_t size, BUFFER map)
     if (input.data_const_seg && input.data_const_seg->filesize > 0U) {
         memcpy(output.buf + data_const_fileoff,
                input_bytes + input.data_const_seg->fileoff,
-               input.data_const_seg->filesize);
+               (size_t)input.data_const_seg->filesize);
     }
 
     /* Distribute the combined payload into its file ranges, in the same order
@@ -1717,18 +1717,18 @@ BUFFER exe_macho(const void *buf, size_t size, BUFFER map)
     {
         const uint8_t *payload_cursor = (const uint8_t *)combined_payload.buf;
 
-        memcpy(output.buf + cmds_end_offs, payload_cursor, payload_gap);
+        memcpy(output.buf + cmds_end_offs, payload_cursor, (size_t)payload_gap);
         payload_cursor += payload_gap;
-        memcpy(output.buf + payload_offs, payload_cursor, payload_tail);
+        memcpy(output.buf + payload_offs, payload_cursor, (size_t)payload_tail);
         payload_cursor += payload_tail;
-        memcpy(output.buf + data_const_fileoff + data_const_content_size, payload_cursor, payload_data_const);
+        memcpy(output.buf + data_const_fileoff + data_const_content_size, payload_cursor, (size_t)payload_data_const);
     }
 
     /* __DATA is copied verbatim only when not folded into the payload. */
     if (input.data_seg && input.data_seg->filesize > 0U && ! data_folded) {
         memcpy(output.buf + data_fileoff,
                input_bytes + input.data_seg->fileoff,
-               input.data_seg->filesize);
+               (size_t)input.data_seg->filesize);
     }
 
     /* Copy the chained fixups (the only __LINKEDIT content we keep) to the
@@ -1737,7 +1737,7 @@ BUFFER exe_macho(const void *buf, size_t size, BUFFER map)
     if (linkedit_content_size > 0U) {
         memcpy(output.buf + linkedit_fileoff,
                input_bytes + input.chained_fixups_cmd->dataoff,
-               linkedit_content_size);
+               (size_t)linkedit_content_size);
     }
 
     if (input.chained_fixups_cmd) {
@@ -1811,12 +1811,12 @@ BUFFER exe_macho(const void *buf, size_t size, BUFFER map)
 
     if (have_report) {
         const MAP_OUT_REGION regions[] = {
-            { "mach header + cmds", 0,                  cmds_end_offs,                          0 },
-            { "loader code",        loader_offs,        payload_offs - loader_offs,             0 },
-            { "compressed payload", payload_offs,       compressed_size,                     1 },
-            { "__DATA_CONST",       data_const_fileoff, linkedit_fileoff - data_const_fileoff,  0 },
-            { "__LINKEDIT",         linkedit_fileoff,   code_limit - linkedit_fileoff,          0 },
-            { "signature",          code_limit,         sig_size,                               0 },
+            { "mach header + cmds", 0,                          (size_t)cmds_end_offs,                           0 },
+            { "loader code",        (size_t)loader_offs,        (size_t)(payload_offs - loader_offs),            0 },
+            { "compressed payload", (size_t)payload_offs,       compressed_size,                                 1 },
+            { "__DATA_CONST",       (size_t)data_const_fileoff, (size_t)(linkedit_fileoff - data_const_fileoff), 0 },
+            { "__LINKEDIT",         (size_t)linkedit_fileoff,   (size_t)(code_limit - linkedit_fileoff),         0 },
+            { "signature",          (size_t)code_limit,         sig_size,                                        0 },
         };
 
         map_print_report(regions, sizeof(regions) / sizeof(regions[0]), &map_table, &bit_count);
