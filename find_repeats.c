@@ -4,13 +4,14 @@
 
 #include "find_repeats.h"
 #include "bit_ops.h"
-#include "lza_defines.h"
 
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#define LZA_LENGTH_TAIL_BITS 11
+#define MAX_LZA_SIZE (17 + (1 << LZA_LENGTH_TAIL_BITS))
 #define MAX_OFFSETS 15
 #define INVALID_ID  (~0U)
 

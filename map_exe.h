@@ -16,7 +16,7 @@
 typedef struct {
     char    *name;          /* item name, owned by the struct, NULL for gaps       */
     uint64_t src_addr;      /* source address in process's VA space, or MAP_NO_SRC */
-    size_t   input_offset;  /* offset within the lz_compress input buffer          */
+    size_t   input_offset;  /* offset within the lza_compress input buffer         */
     size_t   orig_size;     /* original size, in bytes                             */
 } MAP_ITEM;
 
@@ -45,8 +45,8 @@ void map_table_sort(MAP_TABLE *table);
 int  map_table_fill_gaps(MAP_TABLE *table, size_t src_size);
 
 /* Build a SYMBOL_BIT_COUNT from a sorted, gap-filled table.  Allocates
- * symbol_starts and symbol_bit_counts (freed with map_free_tracker).
- * symbol_bit_counts[i] corresponds to table->items[i].  Returns 0 on success. */
+ * symbol_starts and the in/out bit-count arrays (freed with map_free_tracker).
+ */
 int  map_table_make_tracker(const MAP_TABLE *table, size_t src_size, SYMBOL_BIT_COUNT *bit_count);
 void map_free_tracker(SYMBOL_BIT_COUNT *bit_count);
 
@@ -57,6 +57,8 @@ unsigned int map_text_parse_hex(const char **buf, const char *end, uint64_t *out
 
 /* Print the unified layout report to stdout.  Regions print in array order; the
  * region with is_payload set is expanded into one row per table item, using
- * bit_count->symbol_bit_counts[i] for the per-item compressed size. */
-void map_print_report(const MAP_OUT_REGION *regions, size_t region_count,
-                      const MAP_TABLE *table, const SYMBOL_BIT_COUNT *bit_count);
+ * bit_count's per-item in/out bit counts for the pre- and post-entropy sizes. */
+void map_print_report(const MAP_OUT_REGION   *regions,
+                      size_t                  region_count,
+                      const MAP_TABLE        *table,
+                      const SYMBOL_BIT_COUNT *bit_count);

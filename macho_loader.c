@@ -2,7 +2,6 @@
  * Copyright (c) 2026 Chris Dragan
  */
 
-#include "arith_decode.h"
 #include "lza_decompress.h"
 #include "macho_common.h"
 
@@ -97,10 +96,8 @@ static int64_t sys_mprotect(void *addr, uint64_t len, int prot)
 int loader(int argc, char **argv, char **envp, char **apple)
 {
     const uintptr_t   image_base        = macho_live_image_base(&macho_live_layout);
-    uint8_t          *lz77_data         = (uint8_t *)(image_base + macho_live_layout.lz77_data_offs);
-    const uint32_t    lz77_size         = macho_live_layout.lz77_data_size;
     const uint32_t    range_count       = macho_live_layout.payload_range_count;
-    uint8_t          *gather            = lz77_data + ((lz77_size + 15U) & ~(uint32_t)15U);
+    uint8_t          *gather            = (uint8_t *)(image_base + macho_live_layout.gather_offs);
     uint8_t          *decomp_base       = (uint8_t *)(image_base + macho_live_layout.decomp_base_offs);
     const uint32_t    decomp_size       = macho_live_layout.decomp_size;
     const uint32_t    data_content_size = macho_live_layout.data_content_size;
@@ -109,12 +106,12 @@ int loader(int argc, char **argv, char **envp, char **apple)
     uint32_t          payload_size      = 0;
     uint32_t          range_idx;
 
-    /* The combined arith payload is stored in disjoint file ranges:
+    /* The compressed payload is stored in disjoint file ranges:
      * - the alignment gap before the loader,
      * - the __TEXT tail,
      * - the __DATA_CONST padding
-     * which are not contiguous in VM, so reassemble it into a scratch
-     * buffer placed just past the LZ77 output in __SCRATCH.
+     * which are not contiguous in VM, so reassemble it into the __SCRATCH
+     * gather buffer before decoding.
      */
     for (range_idx = 0; range_idx < range_count; range_idx++) {
         const uint8_t *piece      = (const uint8_t *)(image_base + macho_live_layout.payload_range_offs[range_idx]);
@@ -127,10 +124,7 @@ int loader(int argc, char **argv, char **envp, char **apple)
         payload_size += piece_size;
     }
 
-    /* Stage 1: arith-decode the gathered payload into the LZ77 stream. */
-    arith_decode(lz77_data, lz77_size, gather, payload_size);
-
-    /* Stage 2: LZ-decompress into __UNPACK.  AMFI forbids a one-shot mmap
+    /* Decompress into __UNPACK.  AMFI forbids a one-shot mmap
      * with both PROT_WRITE and PROT_EXEC, so map the region RW (anonymous,
      * MAP_FIXED to keep the baked-in vmaddr), decompress, then mprotect up to
      * RX before jumping in.
@@ -157,7 +151,8 @@ int loader(int argc, char **argv, char **envp, char **apple)
         uint32_t                 copy_idx;
         uint32_t                 rebase_idx;
 
-        lz_decompress(data_raw, (size_t)decomp_size + rebase_bytes + data_content_size, lz77_data);
+        lza_decompress(data_raw, (size_t)decomp_size + rebase_bytes + data_content_size,
+                       gather, payload_size);
 
         for (copy_idx = 0; copy_idx < decomp_size; copy_idx++) {
             decomp_base[copy_idx] = data_raw[copy_idx];
@@ -175,7 +170,7 @@ int loader(int argc, char **argv, char **envp, char **apple)
         }
     }
     else {
-        lz_decompress(decomp_base, decomp_size, lz77_data);
+        lza_decompress(decomp_base, decomp_size, gather, payload_size);
     }
 
     invalidate_icache(decomp_base, decomp_size);

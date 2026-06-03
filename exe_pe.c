@@ -3,8 +3,6 @@
  */
 
 #include "exe_pe.h"
-#include "arith_decode.h"
-#include "arith_encode.h"
 #include "load_file.h"
 #include "lza_decompress.h"
 #include "lza_compress.h"
@@ -44,21 +42,17 @@
  *                       |    loader      |    in the original IAT in original process data
  *                       |                |
  *                       +----------------+
- *                       |     TODO       |
- * lz77_data_rva ------> +----------------+ <- LZ77-compressed data is decoded here by the
- *                       |   LZ77 data    |    arithmetic decoder
- *                       |                |
- * lz77_decomp_rva ----> +----------------+ <- LZ77 decompressor is decoded here by the
- *                       |     LZ77       |    arithmetic decoder
- *                       |  decompressor  |
- *                       |                |
+ *                       |      TODO      |
+ * decomp_end_rva -----> +----------------+ <- End of the decompressed region [decomp_base, decomp_end);
+ *                       :  4K alignment  :    the program, iat and import loader decompress into it;
+ *                       :    padding     :    padded up to the next page boundary for comp_data below
  * comp_data_rva ------> +----------------+ <- This is where the fully compressed program is loaded
  *                       |   compressed   |    by the OS loader from the new executable;
  *                       |    program     |    this is also the begining of the second section
  *                       |                |
- * arith_decoder_rva --> +----------------+ <- Arithmetic decoder is stored here;
- *                       |   arithmetic   |    this rva is also the new entry_point_rva;
- *                       |    decoder     |    address NOT aligned on 4K
+ * loader_rva ---------> +----------------+ <- Decompression loader (pe_lza_decompress) is stored here;
+ *                       |  decompressor  |    it unpacks comp_data into [decomp_base, decomp_end) then
+ *                       |                |    runs the import loader.  Also the entry_point_rva
  * live_layout_rva ----> +----------------+ <- Live layout structure used by loaders; address NOT
  *                       |  live layout   |    aligned on 4K
  * import_str_rva -----> +----------------+ <- Imported strings; address NOT aligned on 4K
@@ -77,10 +71,9 @@ typedef struct {
     uint32_t decomp_base_rva;
     uint32_t iat_rva;
     uint32_t import_loader_rva;
-    uint32_t lz77_data_rva;
-    uint32_t lz77_decompressor_rva;
+    uint32_t decomp_end_rva;
     uint32_t comp_data_rva;
-    uint32_t arith_decoder_rva;
+    uint32_t loader_rva;
     uint32_t live_layout_rva;
     uint32_t import_str_rva;
     uint32_t mini_iat_rva;
@@ -956,11 +949,9 @@ typedef struct {
     uint32_le entry_point;
     uint32_le iat;
     uint32_le import_loader;
-    uint32_le lz77_data;
-    uint32_le lz77_decomp;
     uint32_le comp_data;
     uint32_le mini_iat;
-    uint32_le lz77_data_size;
+    uint32_le decomp_size;
     uint32_le comp_data_size;
 } FINAL_LAYOUT_32;
 
@@ -969,16 +960,14 @@ typedef struct {
     uint64_le entry_point;
     uint64_le iat;
     uint64_le import_loader;
-    uint64_le lz77_data;
-    uint64_le lz77_decomp;
     uint64_le comp_data;
     uint64_le mini_iat;
-    uint32_le lz77_data_size;
+    uint32_le decomp_size;
     uint32_le comp_data_size;
 } FINAL_LAYOUT_64;
 
-STATIC_ASSERT(sizeof(FINAL_LAYOUT_32) == 40, "FINAL_LAYOUT_32 has unexpected padding");
-STATIC_ASSERT(sizeof(FINAL_LAYOUT_64) == 72, "FINAL_LAYOUT_64 has unexpected padding");
+STATIC_ASSERT(sizeof(FINAL_LAYOUT_32) == 32, "FINAL_LAYOUT_32 has unexpected padding");
+STATIC_ASSERT(sizeof(FINAL_LAYOUT_64) == 56, "FINAL_LAYOUT_64 has unexpected padding");
 
 static BUFFER make_room_for_live_layout(BUFFER   output,
                                         LAYOUT  *layout,
@@ -1002,8 +991,6 @@ static void fill_live_layout(BUFFER   output,
                              uint32_t entry_point,
                              uint16_t pe_format,
                              uint32_t import_loader_offs,
-                             uint32_t lz77_decomp_offs,
-                             uint32_t lz77_data_size,
                              uint32_t comp_data_size)
 {
     if (pe_format == PE_FORMAT_PE32) {
@@ -1015,11 +1002,9 @@ static void fill_live_layout(BUFFER   output,
         final_layout->entry_point    = make_uint32_le((uint32_t)layout->image_base + entry_point);
         final_layout->iat            = make_uint32_le((uint32_t)layout->image_base + layout->iat_rva);
         final_layout->import_loader  = make_uint32_le((uint32_t)layout->image_base + layout->import_loader_rva + import_loader_offs);
-        final_layout->lz77_data      = make_uint32_le((uint32_t)layout->image_base + layout->lz77_data_rva);
-        final_layout->lz77_decomp    = make_uint32_le((uint32_t)layout->image_base + layout->lz77_decompressor_rva + lz77_decomp_offs);
         final_layout->comp_data      = make_uint32_le((uint32_t)layout->image_base + layout->comp_data_rva);
         final_layout->mini_iat       = make_uint32_le((uint32_t)layout->image_base + layout->mini_iat_rva);
-        final_layout->lz77_data_size = make_uint32_le(lz77_data_size);
+        final_layout->decomp_size    = make_uint32_le(layout->decomp_end_rva - layout->decomp_base_rva);
         final_layout->comp_data_size = make_uint32_le(comp_data_size);
     }
     else {
@@ -1031,11 +1016,9 @@ static void fill_live_layout(BUFFER   output,
         final_layout->entry_point    = make_uint64_le(layout->image_base + entry_point);
         final_layout->iat            = make_uint64_le(layout->image_base + layout->iat_rva);
         final_layout->import_loader  = make_uint64_le(layout->image_base + layout->import_loader_rva + import_loader_offs);
-        final_layout->lz77_data      = make_uint64_le(layout->image_base + layout->lz77_data_rva);
-        final_layout->lz77_decomp    = make_uint64_le(layout->image_base + layout->lz77_decompressor_rva + lz77_decomp_offs);
         final_layout->comp_data      = make_uint64_le(layout->image_base + layout->comp_data_rva);
         final_layout->mini_iat       = make_uint64_le(layout->image_base + layout->mini_iat_rva);
-        final_layout->lz77_data_size = make_uint32_le(lz77_data_size);
+        final_layout->decomp_size    = make_uint32_le(layout->decomp_end_rva - layout->decomp_base_rva);
         final_layout->comp_data_size = make_uint32_le(comp_data_size);
     }
 }
@@ -1043,49 +1026,36 @@ static void fill_live_layout(BUFFER   output,
 static int verify_compression(BUFFER   process_va,
                               LAYOUT  *layout,
                               BUFFER   scratch,
-                              uint32_t lz77_data_size,
                               uint32_t comp_data_size)
 {
-    BUFFER arith_output;
-    BUFFER decompressed;
-    BUFFER comp_data;
-    BUFFER orig_lz77_data;
+    const uint32_t program_size = layout->decomp_end_rva - layout->decomp_base_rva;
+    BUFFER         decompressed;
+    BUFFER         comp_data;
 
-    if (scratch.size < lz77_data_size + layout->lz77_data_rva) {
+    if (scratch.size < program_size) {
         fprintf(stderr, "Error: Not enough buffer space to verify compression\n");
         return 1;
     }
 
-    arith_output   = buf_truncate(scratch, lz77_data_size);
-    scratch        = buf_get_tail(scratch, lz77_data_size);
-    decompressed   = buf_truncate(scratch, layout->lz77_data_rva - layout->decomp_base_rva);
-    comp_data      = buf_slice(process_va, layout->comp_data_rva, comp_data_size);
-    orig_lz77_data = buf_slice(process_va, layout->lz77_data_rva, lz77_data_size);
+    decompressed = buf_truncate(scratch, program_size);
+    comp_data    = buf_slice(process_va, layout->comp_data_rva, comp_data_size);
 
-    arith_decode(arith_output.buf, arith_output.size,
-                 comp_data.buf,    comp_data.size);
-
-    if (memcmp(orig_lz77_data.buf, arith_output.buf, arith_output.size) != 0) {
-        fprintf(stderr, "Error: Arithmetic coding verification failed\n");
-        return 1;
-    }
-
-    lz_decompress(decompressed.buf, decompressed.size, arith_output.buf);
+    lza_decompress(decompressed.buf, decompressed.size, comp_data.buf, comp_data.size);
 
     if (memcmp(process_va.buf + layout->decomp_base_rva, decompressed.buf, decompressed.size) != 0) {
-        fprintf(stderr, "Error: LZ77 compression verification failed\n");
+        fprintf(stderr, "Error: compression verification failed\n");
         return 1;
     }
 
     return 0;
 }
 
-static void patch_32bit_arith_decoder(BUFFER buf, const LAYOUT *layout)
+static void patch_32bit_loader(BUFFER buf, const LAYOUT *layout)
 {
-    const uint32_t ad_delta = (uint32_t)(layout->arith_decoder_rva - layout->decomp_base_rva);
-    const uint32_t base     = (uint32_t)(layout->image_base + layout->decomp_base_rva);
-    const uint32_t end      = (uint32_t)(base + buf.size);
-    const uint8_t  msb      = (uint8_t)(base >> 24);
+    const uint32_t loader_delta = (uint32_t)(layout->loader_rva - layout->decomp_base_rva);
+    const uint32_t base         = (uint32_t)(layout->image_base + layout->decomp_base_rva);
+    const uint32_t end          = (uint32_t)(base + buf.size);
+    const uint8_t  msb          = (uint8_t)(base >> 24);
 
     while (buf.size > 3) {
         uint8_t *const found = (uint8_t *)memchr(buf.buf + 3, msb, buf.size - 3);
@@ -1105,7 +1075,7 @@ static void patch_32bit_arith_decoder(BUFFER buf, const LAYOUT *layout)
             continue;
         }
 
-        *pvalue = make_uint32_le(value + ad_delta);
+        *pvalue = make_uint32_le(value + loader_delta);
 
         buf = buf_get_tail(buf, pos + 1);
     }
@@ -1118,7 +1088,7 @@ static int install_live_layout(BUFFER buf, uint16_t pe_format, const LAYOUT *lay
     const uint64_t       layout_va   = layout->image_base + layout->live_layout_rva;
 
     if (pe_format == PE_FORMAT_PE32)
-        patch_32bit_arith_decoder(buf, layout);
+        patch_32bit_loader(buf, layout);
 
     for (;;) {
         uint8_t *const found = (uint8_t *)memchr(buf.buf, 0x0D, buf.size);
@@ -1142,7 +1112,7 @@ static int install_live_layout(BUFFER buf, uint16_t pe_format, const LAYOUT *lay
         buf = buf_get_tail(buf, pos + 1);
     }
 
-    fprintf(stderr, "Error: Live layout signature not found in pe_arith_decode loader\n");
+    fprintf(stderr, "Error: Live layout signature not found in pe_lza_decompress loader\n");
     return 1;
 }
 
@@ -1197,10 +1167,8 @@ BUFFER exe_pe(const void *buf, size_t size, BUFFER map)
     BUFFER                output         = { NULL, 0 };
     BUFFER                iat_data       = { NULL, 0 };
     BUFFER                import_loader  = { NULL, 0 };
-    BUFFER                lz77_data      = { NULL, 0 };
-    BUFFER                lz77_decomp    = { NULL, 0 };
     BUFFER                comp_data      = { NULL, 0 };
-    BUFFER                arith_decoder  = { NULL, 0 };
+    BUFFER                loader  = { NULL, 0 };
     BUFFER                header_data    = { NULL, 0 };
     BUFFER                live_layout    = { NULL, 0 };
     MAP_TABLE             map_table;
@@ -1214,10 +1182,9 @@ BUFFER exe_pe(const void *buf, size_t size, BUFFER map)
     uint32_t              num_sections;
     uint32_t              va_start       = ~0U;
     uint32_t              va_end         = 0;
-    uint32_t              lz77_data_size = 0;
+    uint32_t              comp_data_size = 0;
     uint32_t              import_loader_offs;
-    uint32_t              lz77_decomp_offs;
-    uint32_t              arith_decoder_offs;
+    uint32_t              loader_offs;
     unsigned int          i;
     int                   error          = 1;
     uint16_t              pe_flags;
@@ -1534,12 +1501,12 @@ BUFFER exe_pe(const void *buf, size_t size, BUFFER map)
 
         output = buf_get_tail(output, import_loader.size);
 
-        layout.lz77_data_rva = layout.import_loader_rva + (uint32_t)import_loader.size;
+        layout.decomp_end_rva = layout.import_loader_rva + (uint32_t)import_loader.size;
     }
     /* Ignore import table if it's absent */
     else {
         layout.import_loader_rva = layout.iat_rva;
-        layout.lz77_data_rva     = layout.iat_rva;
+        layout.decomp_end_rva     = layout.iat_rva;
     }
 
     /* TODO separate .text section into streams */
@@ -1547,7 +1514,7 @@ BUFFER exe_pe(const void *buf, size_t size, BUFFER map)
 
     /* Build the layout report table and symbol bit count tracking. */
     {
-        const uint32_t input_size = layout.lz77_data_rva - va_start;
+        const uint32_t input_size = layout.decomp_end_rva - va_start;
 
         if (build_pe_map_table(map,
                                section_header,
@@ -1566,57 +1533,37 @@ BUFFER exe_pe(const void *buf, size_t size, BUFFER map)
         }
     }
 
-    /* Compress the program's address space with LZ77 */
-    lz77_data  = output;
-    compressed = lz_compress(lz77_data.buf,
-                             lz77_data.size,
-                             process_va.buf + va_start,
-                             layout.lz77_data_rva - va_start,
-                             have_map ? &bit_count : NULL);
+    /* The compressed stream is loaded from file, so align it on 4K.  The
+     * program decompresses into [decomp_base_rva, decomp_end_rva), a zero-fill
+     * section; the decoder reads comp_data and writes the program there.
+     */
+    layout.comp_data_rva = align_up(layout.decomp_end_rva, 0x1000);
+    output = buf_get_tail(output, layout.comp_data_rva - layout.decomp_end_rva);
 
-    if ( ! compressed.lz)
+    /* Compress the program's address space into one arithmetic-coded stream. */
+    comp_data  = output;
+    compressed = lza_compress(comp_data.buf,
+                              comp_data.size,
+                              process_va.buf + va_start,
+                              layout.decomp_end_rva - va_start,
+                              have_map ? &bit_count : NULL);
+
+    if ( ! compressed.compressed)
         goto cleanup;
 
-    layout.lz77_decompressor_rva = align_up(layout.lz77_data_rva + (uint32_t)compressed.lz, 16);
-    lz77_data.size               = layout.lz77_decompressor_rva - layout.lz77_data_rva;
-
-    output = buf_get_tail(output, lz77_data.size);
-
-    /* Add LZ77 decompressor */
-    lz77_decomp = output;
-    lz77_decomp_offs = add_loader(&lz77_decomp, "pe_lz_decompress", machine);
-    if (lz77_decomp_offs == ~0U)
-        goto cleanup;
-
-    lz77_data_size       = (uint32_t)lz77_decomp.size;
-    output               = buf_get_tail(output, lz77_decomp.size);
-    lz77_data_size      += (uint32_t)lz77_data.size;
-    layout.comp_data_rva = layout.lz77_decompressor_rva + (uint32_t)lz77_decomp.size;
-
-    /* Next section is loaded from file, so align it on 4K */
-    {
-        const uint32_t tail = layout.comp_data_rva % 0x1000;
-        const uint32_t fill = tail ? (0x1000 - tail) : 0;
-
-        layout.comp_data_rva += fill;
-        output = buf_get_tail(output, fill);
-    }
-
-    /* Encode the LZ77-compressed data with arithmetic coder */
-    comp_data                = output;
-    compressed.compressed    = arith_encode(comp_data.buf, comp_data.size, lz77_data.buf, lz77_data_size);
-    comp_data.size           = align_up((uint32_t)compressed.compressed, 16);
+    comp_data_size           = (uint32_t)compressed.compressed;
+    comp_data.size           = align_up(comp_data_size, 16);
     output                   = buf_get_tail(output, comp_data.size);
-    layout.arith_decoder_rva = layout.comp_data_rva + (uint32_t)comp_data.size;
+    layout.loader_rva = layout.comp_data_rva + (uint32_t)comp_data.size;
 
-    /* Add arithmetic decoder */
-    arith_decoder = output;
-    arith_decoder_offs = add_loader(&arith_decoder, "pe_arith_decode", machine);
-    if (arith_decoder_offs == ~0U)
+    /* Add the decompressor stub, which is the program's new entry point. */
+    loader = output;
+    loader_offs = add_loader(&loader, "pe_lza_decompress", machine);
+    if (loader_offs == ~0U)
         goto cleanup;
 
-    output                 = buf_get_tail(output, arith_decoder.size);
-    layout.live_layout_rva = layout.arith_decoder_rva + (uint32_t)arith_decoder.size;
+    output                 = buf_get_tail(output, loader.size);
+    layout.live_layout_rva = layout.loader_rva + (uint32_t)loader.size;
 
     /* Make room for live layout (filled later) */
     live_layout = make_room_for_live_layout(output, &layout, pe_format);
@@ -1653,17 +1600,15 @@ BUFFER exe_pe(const void *buf, size_t size, BUFFER map)
                      get_uint32_le(opt_header->entry_point),
                      pe_format,
                      import_loader_offs,
-                     lz77_decomp_offs,
-                     lz77_data_size,
-                     (uint32_t)compressed.compressed);
+                     comp_data_size);
 
-    /* Patch arithmetic decoder to locate live layout */
-    if (install_live_layout(arith_decoder, pe_format, &layout))
+    /* Patch the decoder stub to locate the live layout */
+    if (install_live_layout(loader, pe_format, &layout))
         goto cleanup;
 
     fill_pe_header(process_va,
                    &layout,
-                   layout.arith_decoder_rva + arith_decoder_offs,
+                   layout.loader_rva + loader_offs,
                    opt_header);
 
     printf("Compression stats:\n");
@@ -1674,9 +1619,8 @@ BUFFER exe_pe(const void *buf, size_t size, BUFFER map)
     printf("        LONGREP1                 %zu\n", compressed.stats_longrep[1]);
     printf("        LONGREP2                 %zu\n", compressed.stats_longrep[2]);
     printf("        LONGREP3                 %zu\n", compressed.stats_longrep[3]);
-    printf("        Original data            %u\n",  layout.lz77_data_rva - va_start);
-    printf("        LZ77 compressed          %zu\n", compressed.lz);
-    printf("        Arith encoded            %zu\n", compressed.compressed);
+    printf("        Original data            %u\n",  layout.decomp_end_rva - va_start);
+    printf("        Compressed               %zu\n", compressed.compressed);
 
     printf("Wasted %u bytes in the header\n", new_header_size - (uint32_t)header_data.size);
 
@@ -1684,11 +1628,10 @@ BUFFER exe_pe(const void *buf, size_t size, BUFFER map)
     printf("        image base               0x%" PRIx64 "\n",   layout.image_base);
     printf("        decomp base              0x%x\n",            layout.decomp_base_rva);
     printf("        iat rva                  0x%x (%u bytes)\n", layout.iat_rva,               layout.import_loader_rva - layout.iat_rva);
-    printf("        import loader rva        0x%x (%u bytes)\n", layout.import_loader_rva,     layout.lz77_data_rva - layout.import_loader_rva);
-    printf("        lz77 data rva            0x%x (%u bytes)\n", layout.lz77_data_rva,         layout.lz77_decompressor_rva - layout.lz77_data_rva);
-    printf("        lz77 decompressor rva    0x%x (%u bytes)\n", layout.lz77_decompressor_rva, lz77_data_size - (layout.lz77_decompressor_rva - layout.lz77_data_rva));
-    printf("        comp data rva            0x%x (%u bytes)\n", layout.comp_data_rva,         layout.arith_decoder_rva - layout.comp_data_rva);
-    printf("        arith decoder rva        0x%x (%u bytes)\n", layout.arith_decoder_rva,     layout.live_layout_rva - layout.arith_decoder_rva);
+    printf("        import loader rva        0x%x (%u bytes)\n", layout.import_loader_rva,     layout.decomp_end_rva - layout.import_loader_rva);
+    printf("        program rva              0x%x (%u bytes)\n", layout.decomp_base_rva,       layout.decomp_end_rva - layout.decomp_base_rva);
+    printf("        comp data rva            0x%x (%u bytes)\n", layout.comp_data_rva,         layout.loader_rva - layout.comp_data_rva);
+    printf("        loader rva               0x%x (%u bytes)\n", layout.loader_rva,            layout.live_layout_rva - layout.loader_rva);
     printf("        live layout rva          0x%x (%u bytes)\n", layout.live_layout_rva,       layout.import_str_rva - layout.live_layout_rva);
     printf("        import str rva           0x%x (%u bytes)\n", layout.import_str_rva,        layout.mini_iat_rva - layout.import_str_rva);
     printf("        mini iat rva             0x%x (%u bytes)\n", layout.mini_iat_rva,          layout.import_dir_rva - layout.mini_iat_rva);
@@ -1698,11 +1641,11 @@ BUFFER exe_pe(const void *buf, size_t size, BUFFER map)
     if (have_map) {
         const size_t header        = new_header_size;
         const size_t payload_offs  = header;
-        const size_t payload_size  = layout.arith_decoder_rva - layout.comp_data_rva;
+        const size_t payload_size  = layout.loader_rva - layout.comp_data_rva;
         const MAP_OUT_REGION regions[] = {
             { "PE header",          0,                                                            header,                                                       0 },
             { "compressed payload", payload_offs,                                                 payload_size,                                                 1 },
-            { "arith decoder",      header + (layout.arith_decoder_rva - layout.comp_data_rva),   layout.live_layout_rva  - layout.arith_decoder_rva,           0 },
+            { "decompression loader", header + (layout.loader_rva - layout.comp_data_rva), layout.live_layout_rva  - layout.loader_rva,           0 },
             { "live layout",        header + (layout.live_layout_rva   - layout.comp_data_rva),   layout.import_str_rva   - layout.live_layout_rva,             0 },
             { "import str",         header + (layout.import_str_rva    - layout.comp_data_rva),   layout.mini_iat_rva     - layout.import_str_rva,              0 },
             { "mini iat",           header + (layout.mini_iat_rva      - layout.comp_data_rva),   layout.import_dir_rva   - layout.mini_iat_rva,                0 },
@@ -1713,7 +1656,7 @@ BUFFER exe_pe(const void *buf, size_t size, BUFFER map)
     }
 
     /* Verify compression */
-    if (verify_compression(mem_image, &layout, output, lz77_data_size, (uint32_t)compressed.compressed))
+    if (verify_compression(mem_image, &layout, output, comp_data_size))
         goto cleanup;
 
     /* Produce final file image */

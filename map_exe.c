@@ -189,7 +189,8 @@ int map_table_fill_gaps(MAP_TABLE *table, size_t src_size)
 int map_table_make_tracker(const MAP_TABLE *table, size_t src_size, SYMBOL_BIT_COUNT *bit_count)
 {
     size_t *symbol_starts;
-    size_t *symbol_bit_counts;
+    size_t *symbol_in_bit_counts;
+    size_t *symbol_out_bit_counts;
     size_t  i;
 
     (void)src_size;
@@ -197,20 +198,23 @@ int map_table_make_tracker(const MAP_TABLE *table, size_t src_size, SYMBOL_BIT_C
     if ( ! table->count)
         return -1;
 
-    symbol_starts     = (size_t *)malloc(table->count * sizeof(*symbol_starts));
-    symbol_bit_counts = (size_t *)calloc(table->count, sizeof(*symbol_bit_counts));
-    if ( ! symbol_starts || ! symbol_bit_counts) {
+    symbol_starts         = (size_t *)malloc(table->count * sizeof(*symbol_starts));
+    symbol_in_bit_counts  = (size_t *)calloc(table->count, sizeof(*symbol_in_bit_counts));
+    symbol_out_bit_counts = (size_t *)calloc(table->count, sizeof(*symbol_out_bit_counts));
+    if ( ! symbol_starts || ! symbol_in_bit_counts || ! symbol_out_bit_counts) {
         free(symbol_starts);
-        free(symbol_bit_counts);
+        free(symbol_in_bit_counts);
+        free(symbol_out_bit_counts);
         return -1;
     }
 
     for (i = 0; i < table->count; i++)
         symbol_starts[i] = table->items[i].input_offset;
 
-    bit_count->symbol_starts     = symbol_starts;
-    bit_count->symbol_bit_counts = symbol_bit_counts;
-    bit_count->num_symbols       = table->count;
+    bit_count->symbol_starts         = symbol_starts;
+    bit_count->symbol_in_bit_counts  = symbol_in_bit_counts;
+    bit_count->symbol_out_bit_counts = symbol_out_bit_counts;
+    bit_count->num_symbols           = table->count;
 
     return 0;
 }
@@ -219,15 +223,17 @@ void map_free_tracker(SYMBOL_BIT_COUNT *bit_count)
 {
     /* symbol_starts is const in the public struct but owned by us. */
     free((void *)bit_count->symbol_starts);
-    free(bit_count->symbol_bit_counts);
+    free(bit_count->symbol_in_bit_counts);
+    free(bit_count->symbol_out_bit_counts);
 
-    bit_count->symbol_starts     = NULL;
-    bit_count->symbol_bit_counts = NULL;
-    bit_count->num_symbols       = 0;
+    bit_count->symbol_starts         = NULL;
+    bit_count->symbol_in_bit_counts  = NULL;
+    bit_count->symbol_out_bit_counts = NULL;
+    bit_count->num_symbols           = 0;
 }
 
 static void print_row(const char *out_offset, uint64_t src_addr,
-                      size_t orig_size, size_t new_size, const char *what)
+                      size_t orig_size, size_t in_size, size_t out_size, const char *what)
 {
     char src_text[24];
     char ratio_text[12];
@@ -238,12 +244,12 @@ static void print_row(const char *out_offset, uint64_t src_addr,
         snprintf(src_text, sizeof(src_text), "0x%" PRIx64, src_addr);
 
     if (orig_size)
-        snprintf(ratio_text, sizeof(ratio_text), "%zu%%", new_size * 100 / orig_size);
+        snprintf(ratio_text, sizeof(ratio_text), "%zu%%", out_size * 100 / orig_size);
     else
         snprintf(ratio_text, sizeof(ratio_text), "%s", "-");
 
-    printf("  %-12s %-18s %12zu %12zu %8s  %s\n",
-           out_offset, src_text, orig_size, new_size, ratio_text, what);
+    printf("  %-12s %-18s %12zu %12zu %12zu %8s  %s\n",
+           out_offset, src_text, orig_size, in_size, out_size, ratio_text, what);
 }
 
 void map_print_report(const MAP_OUT_REGION   *regions,
@@ -254,33 +260,37 @@ void map_print_report(const MAP_OUT_REGION   *regions,
     size_t region_index;
 
     printf("Output layout:\n");
-    printf("  %-12s %-18s %12s %12s %8s  %s\n",
-           "out_offset", "src_offset", "orig", "new", "ratio", "what");
+    printf("  %-12s %-18s %12s %12s %12s %8s  %s\n",
+           "Out offset", "Src offset", "Original", "LZ77", "Encoded", "Ratio", "Description");
 
     for (region_index = 0; region_index < region_count; region_index++) {
-        const MAP_OUT_REGION *const region = &regions[region_index];
         char                        out_text[24];
+        const MAP_OUT_REGION *const region     = &regions[region_index];
+        size_t                      orig_total = 0;
+        size_t                      in_total   = 0;
+        size_t                      i;
 
         snprintf(out_text, sizeof(out_text), "0x%zx", region->out_offset);
 
         if ( ! region->is_payload) {
-            print_row(out_text, MAP_NO_SRC, region->size, region->size, region->name);
+            print_row(out_text, MAP_NO_SRC, region->size, region->size, region->size, region->name);
             continue;
         }
 
-        /* The payload row, then one row per source unit. */
-        print_row(out_text, MAP_NO_SRC, region->size, region->size, region->name);
+        for (i = 0; i < table->count; i++) {
+            orig_total += table->items[i].orig_size;
+            in_total   += (bit_count->symbol_in_bit_counts[i] + 7) / 8;
+        }
 
-        {
-            size_t i;
+        print_row(out_text, MAP_NO_SRC, orig_total, in_total, region->size, region->name);
 
-            for (i = 0; i < table->count; i++) {
-                const MAP_ITEM *const item     = &table->items[i];
-                const size_t          new_size = (bit_count->symbol_bit_counts[i] + 7) / 8;
-                const char           *what     = item->name ? item->name : "(padding)";
+        for (i = 0; i < table->count; i++) {
+            const MAP_ITEM *const item     = &table->items[i];
+            const size_t          in_size  = (bit_count->symbol_in_bit_counts[i]  + 7) / 8;
+            const size_t          out_size = (bit_count->symbol_out_bit_counts[i] + 7) / 8;
+            const char           *what     = item->name ? item->name : "(padding)";
 
-                print_row("", item->src_addr, item->orig_size, new_size, what);
-            }
+            print_row("", item->src_addr, item->orig_size, in_size, out_size, what);
         }
     }
 }

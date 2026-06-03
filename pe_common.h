@@ -35,13 +35,11 @@ struct LIVE_LAYOUT_STRUCT {
     ENTRY_POINT    entry_point;
     uint8_t       *iat;
     LOADER         import_loader;
-    uint8_t       *lz77_data;
-    LOADER         lz77_decomp;
     const uint8_t *comp_data;
     MINI_IAT      *mini_iat;
-    uint32_t       lz77_data_size;
+    uint32_t       decomp_size;
     uint32_t       comp_data_size;
 };
 
-STATIC_ASSERT(sizeof(LIVE_LAYOUT) == 8 * sizeof(void *) + 8,
+STATIC_ASSERT(sizeof(LIVE_LAYOUT) == 6 * sizeof(void *) + 2 * sizeof(uint32_t),
               "LIVE_LAYOUT layout changed; keep FINAL_LAYOUT_32/_64 in exe_pe.c in sync");

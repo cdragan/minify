@@ -4,346 +4,256 @@
 
 #include "lza_compress.h"
 
-#include "arith_encode.h"
+#include "arith_model.h"
 #include "bit_emit.h"
 #include "bit_ops.h"
 #include "find_repeats.h"
-#include "lza_defines.h"
+#include "lza_context.h"
 
-#include <assert.h>
-#include <string.h>
-
-typedef struct {
-    BIT_EMITTER       emitter[LZS_NUM_STREAMS];
-    COMPRESSED_SIZES  sizes;
-    SYMBOL_BIT_COUNT *symbols;
-    size_t            cur_symbol_idx;
-    uint8_t           prev_lit;
-} COMPRESS;
-
-static void track_compressed_bits(COMPRESS *compress, size_t pos, unsigned int bits)
-{
-    SYMBOL_BIT_COUNT *const symbols = compress->symbols;
-
-    if ( ! symbols)
-        return;
-
-    while (compress->cur_symbol_idx + 1 < symbols->num_symbols &&
-           pos >= symbols->symbol_starts[compress->cur_symbol_idx + 1])
-        ++compress->cur_symbol_idx;
-
-    symbols->symbol_bit_counts[compress->cur_symbol_idx] += bits;
-}
-
-static void init_compress(COMPRESS *compress, void *buf, size_t size)
-{
-    uint8_t     *dest       = (uint8_t *)buf;
-    const size_t chunk_size = size / LZS_NUM_STREAMS;
-    uint32_t     i;
-
-    memset(compress, 0, sizeof(*compress));
-
-    compress->symbols = NULL;
-
-    for (i = 0; i < LZS_NUM_STREAMS; i++) {
-        init_bit_emitter(&compress->emitter[i], dest, chunk_size);
-        dest += chunk_size;
-    }
-}
-
-static void finish_compress(COMPRESS *compress, size_t stream_sizes[])
-{
-    uint8_t *buf;
-    uint32_t i;
-    size_t   total = 0;
-
-    for (i = 0; i < LZS_NUM_STREAMS; i++) {
-        const size_t stream_size = emit_tail(&compress->emitter[i]);
-        stream_sizes[i]          = stream_size;
-        total                   += stream_size;
-    }
-
-    buf = compress->emitter[0].begin;
-
-    for (i = 1; i < LZS_NUM_STREAMS; i++) {
-        buf += stream_sizes[i - 1];
-        memmove(buf, compress->emitter[i].begin, stream_sizes[i]);
-    }
-
-    compress->sizes.lz = total;
-}
-
-/* LZMA packets
- * 0 + byte                 LIT         A single literal/original byte.
- * 1+0 + length + distance  MATCH       Repeated sequence with length and distance.
- * 1+1+0+0                  SHORTREP    Repeated sequence, length=1, distance equal to the last used distance.
- * 1+1+0+1 + length         LONGREP[0]  Repeated sequence, distance is equal to the last used distance.
- * 1+1+1+0 + length         LONGREP[1]  Repeated sequence, distance is equal to the second last used distance.
- * 1+1+1+1+0 + length       LONGREP[2]  Repeated sequence, distance is equal to the third last used distance.
- * 1+1+1+1+1 + length       LONGREP[3]  Repeated sequence, distance is equal to the fourth last used distance.
- */
-
-enum PACKET_TYPE {
-    TYPE_LIT      = 0,      /* 0 */
-    TYPE_MATCH    = 2,      /* 10 */
-    TYPE_SHORTREP = 0xC,    /* 1100 */
-    TYPE_LONGREP0 = 0xD,    /* 1101 */
-    TYPE_LONGREP1 = 0xE,    /* 1110 */
-    TYPE_LONGREP2 = 0x1E,   /* 11110 */
-    TYPE_LONGREP3 = 0x1F    /* 11111 */
-};
-
-static unsigned int emit_type(COMPRESS *compress, enum PACKET_TYPE type)
-{
-    unsigned int type_size = 1;
-
-    switch (type) {
-        case TYPE_MATCH:    type_size = 2; ++compress->sizes.stats_match;         break;
-        case TYPE_SHORTREP: type_size = 4; ++compress->sizes.stats_shortrep;      break;
-        case TYPE_LONGREP0: type_size = 4; ++compress->sizes.stats_longrep[0];    break;
-        case TYPE_LONGREP1: type_size = 4; ++compress->sizes.stats_longrep[1];    break;
-        case TYPE_LONGREP2: type_size = 5; ++compress->sizes.stats_longrep[2];    break;
-        case TYPE_LONGREP3: type_size = 5; ++compress->sizes.stats_longrep[3];    break;
-        default:                           ++compress->sizes.stats_lit;           break;
-    }
-
-    emit_bits(&compress->emitter[LZS_TYPE], (size_t)type, type_size);
-
-    return type_size;
-}
-
-static unsigned int emit_length(BIT_EMITTER *emitter, size_t length)
-{
-    /* Statistically, length tends to be mostly below 256, so few bits are needed to encode it
-     *
-     * LZ77 length encoding:
-     * 0+ 3 bits        Size encoded using 3 bits, gives the sizes range from 2 to 9.
-     * 1+0+ 3 bits      Size encoded using 3 bits, gives the sizes range from 10 to 17.
-     * 1+1+ n bits      Size encoded using n bits, gives the sizes range from 18 to (17 + (1 << n)).
-     */
-
-    assert(length >= 2);
-    assert(length <= MAX_LZA_SIZE);
-
-    if (length <= 9) {
-        emit_bits(emitter, 0, 1);
-        emit_bits(emitter, length - 2, 3);
-        return 1 + 3;
-    }
-    else if (length <= 17) {
-        emit_bits(emitter, 2, 2);
-        emit_bits(emitter, length - 10, 3);
-        return 2 + 3;
-    }
-    else {
-        emit_bits(emitter, 3, 2);
-        emit_bits(emitter, length - 18, LZA_LENGTH_TAIL_BITS);
-        return 2 + LZA_LENGTH_TAIL_BITS;
-    }
-}
-
-static unsigned int emit_distance(BIT_EMITTER *emitter, size_t distance)
-{
-    /* LZ77 variable-length distance encoding:
-     * - 6-bit distance slot
-     * - Followed by a variable number of bits, depending on the value of the slot
-     *
-     * 6-bit distance slot  Highest 2 bits  Context encoded bits
-     * 0                    00              0
-     * 1                    01              0
-     * 2–62 (even)          10              ((slot / 2) − 1)
-     * 3–63 (odd)           11              (((slot − 1) / 2) − 1)
-     *
-     * Bits   6-bit distance slot   Context encoded bits
-     * 2      00001x                0
-     * 3      00010x                1
-     * 4      00011x                2
-     * 5      00100x                3
-     * 6      00101x                4
-     * :      :::                   :
-     * 32     11111x                30
-     */
-
-    assert(distance > 0);
-
-    --distance;
-
-    if (distance < 2) {
-        emit_bits(emitter, distance, 6);
-        return 6;
-    }
-    else {
-        const unsigned int bits_m1 = 31U - (unsigned int)count_leading_zeroes((unsigned int)distance);
-
-        distance &= ~((size_t)1 << bits_m1);
-
-        distance |= (size_t)bits_m1 << bits_m1;
-
-        emit_bits(emitter, distance, bits_m1 + 5);
-
-        return bits_m1 + 5;
-    }
-}
-
-static unsigned int emit_literal(COMPRESS *compress, const uint8_t *buf, size_t size)
-{
-    const uint8_t *const end = buf + size;
-
-    do {
-        const uint8_t lit = *buf;
-
-        emit_bits(&compress->emitter[LZS_LITERAL_MSB], (lit ^ compress->prev_lit) >> 7, 1);
-
-        compress->prev_lit = lit;
-
-        emit_bits(&compress->emitter[LZS_LITERAL], lit, 7);
-    } while (++buf < end);
-
-    return (unsigned int)size * 8U;
-}
-
-static void report_literal(void *cookie, const uint8_t *buf, size_t pos, size_t size)
-{
-    COMPRESS *const compress = (COMPRESS *)cookie;
-
-    do {
-        unsigned int bits = emit_type(compress, TYPE_LIT);
-
-        bits += emit_literal(compress, &buf[pos], 1);
-
-        track_compressed_bits(compress, pos, bits);
-
-        ++pos;
-        --size;
-    } while (size);
-}
-
-static void report_match(void *cookie, const uint8_t *buf, size_t pos, OCCURRENCE occurrence)
-{
-    COMPRESS *const compress = (COMPRESS *)cookie;
-    unsigned int    bits;
-
-    assert(occurrence.length <= MAX_LZA_SIZE);
-
-    if (occurrence.last < 0) {
-
-        assert(occurrence.length > 1);
-
-        bits  = emit_type(compress, TYPE_MATCH);
-
-        bits += emit_length(&compress->emitter[LZS_SIZE], occurrence.length);
-
-        bits += emit_distance(&compress->emitter[LZS_OFFSET], occurrence.distance);
-    }
-    else if (occurrence.length == 1) {
-        assert(occurrence.last == 0);
-
-        bits = emit_type(compress, TYPE_SHORTREP);
-    }
-    else {
-        enum PACKET_TYPE type;
-
-        switch (occurrence.last) {
-            case 3: type = TYPE_LONGREP3; break;
-            case 2: type = TYPE_LONGREP2; break;
-            case 1: type = TYPE_LONGREP1; break;
-            default:
-                assert(occurrence.last == 0);
-                type = TYPE_LONGREP0;
-        }
-
-        bits  = emit_type(compress, type);
-
-        bits += emit_length(&compress->emitter[LZS_SIZE], occurrence.length);
-    }
-
-    track_compressed_bits(compress, pos, bits);
-}
-
-static size_t emit_header(uint8_t *dest, size_t dest_size, const size_t stream_sizes[])
-{
-    BIT_EMITTER emitter;
-    uint32_t    i;
-
-    init_bit_emitter(&emitter, dest, dest_size);
-
-    for (i = 0; i < LZS_NUM_STREAMS; i++)
-        emit_distance(&emitter, stream_sizes[i]);
-
-    return emit_tail(&emitter);
-}
+#include <stdint.h>
+#include <stdlib.h>
 
 size_t estimate_compress_size(size_t src_size)
 {
     if (src_size < 4096)
         src_size = 4096;
 
-    return src_size * LZS_NUM_STREAMS * 2;
+    return src_size * 2;
 }
 
-COMPRESSED_SIZES lz_compress(void             *dest,
-                             size_t            dest_size,
-                             const void       *src,
-                             size_t            src_size,
-                             SYMBOL_BIT_COUNT *symbols)
+typedef struct {
+    MODEL             ctx[NUM_CONTEXT_BITS];
+    BIT_EMITTER       emitter;
+    uint32_t          low;
+    uint32_t          high;
+    uint32_t          num_pending;
+    SYMBOL_BIT_COUNT *symbols;
+    size_t            cur_symbol_idx;
+    uint64_t          num_in_bits;
+    uint64_t          num_out_bits;
+    COMPRESSED_SIZES  sizes;
+} ENCODER;
+
+static void track_symbol_bits(ENCODER *encoder, size_t pos, uint64_t old_in_bits, uint64_t old_out_bits)
 {
-    COMPRESS compress;
-    size_t   stream_sizes[LZS_NUM_STREAMS];
-    size_t   hdr_size;
-    uint8_t  hdr[LZS_NUM_STREAMS * 4];
+    SYMBOL_BIT_COUNT *const symbols = encoder->symbols;
 
-    assert(dest_size >= src_size);
+    if ( ! symbols)
+        return;
 
-    init_compress(&compress, dest, dest_size);
+    while (encoder->cur_symbol_idx + 1 < symbols->num_symbols &&
+           pos >= symbols->symbol_starts[encoder->cur_symbol_idx + 1])
+        ++encoder->cur_symbol_idx;
 
-    compress.symbols = symbols;
-
-    if (find_repeats((const uint8_t *)src, src_size, report_literal, report_match, &compress)) {
-        memset(&compress.sizes, 0, sizeof(compress.sizes));
-        return compress.sizes;
-    }
-
-    finish_compress(&compress, stream_sizes);
-
-    hdr_size = emit_header(hdr, sizeof(hdr), stream_sizes);
-    assert(hdr_size + compress.sizes.lz <= dest_size);
-    if (hdr_size + compress.sizes.lz > dest_size) {
-        memset(&compress.sizes, 0, sizeof(compress.sizes));
-        return compress.sizes;
-    }
-
-    memmove((uint8_t *)dest + hdr_size, dest, compress.sizes.lz);
-    memcpy(dest, hdr, hdr_size);
-    compress.sizes.lz += hdr_size;
-
-    return compress.sizes;
+    symbols->symbol_in_bit_counts[encoder->cur_symbol_idx]  += (size_t)(encoder->num_in_bits - old_in_bits);
+    symbols->symbol_out_bit_counts[encoder->cur_symbol_idx] += (size_t)(encoder->num_out_bits - old_out_bits);
 }
 
-COMPRESSED_SIZES lza_compress(void       *dest,
-                              size_t      dest_size,
-                              const void *src,
-                              size_t      src_size)
+static void encode_bit(ENCODER *encoder, uint32_t ctx_idx, uint32_t bit)
 {
-    COMPRESSED_SIZES compressed;
-    const size_t     half_size    = dest_size / 2;
-    uint8_t *const   arith_input  = (uint8_t *)dest + half_size;
-    uint8_t         *arith_output = (uint8_t *)dest;
+    MODEL *const   model = &encoder->ctx[ctx_idx];
+    const uint32_t prob0 = model->prob[0];
+    const uint32_t prob1 = model->prob[1];
+    const uint64_t range = (uint64_t)encoder->high - (uint64_t)encoder->low + 1;
+    const uint32_t mid   = (uint32_t)((range * prob0) / (prob0 + prob1));
 
-    assert(half_size >= src_size);
+    ++encoder->num_in_bits;
 
-    compressed = lz_compress(arith_input, half_size, src, src_size, NULL);
+    update_model(model, bit);
 
-    if (compressed.lz == 0)
-        return compressed;
+    if (bit)
+        encoder->low += mid;
+    else
+        encoder->high = encoder->low + mid - 1;
 
-    assert(compressed.lz <= half_size);
+    for (;;) {
+        if (encoder->high < 0x80000000U || encoder->low >= 0x80000000U) {
+            uint32_t out_bit = encoder->low >> 31;
 
-    compressed.compressed = arith_encode(arith_output,
-                                       half_size,
-                                       arith_input,
-                                       compressed.lz);
+            emit_bit(&encoder->emitter, out_bit);
 
-    assert(compressed.compressed <= half_size);
+            out_bit ^= 1;
+            while (encoder->num_pending) {
+                emit_bit(&encoder->emitter, out_bit);
+                --encoder->num_pending;
+            }
+        }
+        else if (encoder->low >= 0x40000000U && encoder->high < 0xC0000000U) {
+            ++encoder->num_pending;
+            encoder->low  &= ~0x40000000U;
+            encoder->high |= 0x40000000U;
+        }
+        else
+            break;
 
-    return compressed;
+        /* Each renorm shift commits exactly one output bit: either an emitted
+         * bit, or a pending bit whose value a later bit will resolve.  Counting
+         * iterations therefore equals emitted_bits + num_pending at all times.
+         */
+        ++encoder->num_out_bits;
+
+        encoder->low  = encoder->low << 1;
+        encoder->high = (encoder->high << 1) + 1;
+    }
+}
+
+/* Code an n-bit value, MSB first, through a bitwise context tree: a prefix-indexed
+ * context model where the context for each bit is the tree node reached by the
+ * higher bits already coded.  This lets a low bit's model depend on the high bits,
+ * capturing intra-field patterns.
+ */
+static void encode_context_tree(ENCODER *encoder, uint32_t base, uint32_t value, uint32_t nbits)
+{
+    uint32_t node = 1;
+
+    for ( ; nbits; nbits--) {
+        const uint32_t bit = (value >> (nbits - 1)) & 1U;
+
+        encode_bit(encoder, base + node, bit);
+        node = (node << 1) | bit;
+    }
+}
+
+/* Code an n-bit value MSB first with one context per bit position.  Used for
+ * the near-random tails (distance mantissa, long-length tail) where the higher
+ * bits do not predict the lower ones, so a context tree would not help.
+ */
+static void encode_pos(ENCODER *encoder, uint32_t base, uint32_t value, uint32_t nbits)
+{
+    uint32_t i;
+
+    for (i = 0; i < nbits; i++)
+        encode_bit(encoder, base + i, (value >> (nbits - 1 - i)) & 1U);
+}
+
+static void encode_length(ENCODER *encoder, uint32_t length)
+{
+    if (length <= 9) {
+        encode_bit(encoder, CTX_LEN_SEL_POS, 0);
+        encode_context_tree(encoder, CTX_LEN_SHORT_POS, length - 2, 3);
+    }
+    else if (length <= 17) {
+        encode_bit(encoder, CTX_LEN_SEL_POS, 1);
+        encode_bit(encoder, CTX_LEN_SEL_POS + 1, 0);
+        encode_context_tree(encoder, CTX_LEN_MID_POS, length - 10, 3);
+    }
+    else {
+        encode_bit(encoder, CTX_LEN_SEL_POS, 1);
+        encode_bit(encoder, CTX_LEN_SEL_POS + 1, 1);
+        encode_pos(encoder, CTX_LEN_TAIL_POS, length - 18, 11);
+    }
+}
+
+static void encode_distance(ENCODER *encoder, uint32_t distance)
+{
+    const uint32_t dd = distance - 1;
+
+    if (dd < 2)
+        encode_context_tree(encoder, CTX_DIST_SLOT_POS, dd, 6);
+    else {
+
+        const uint32_t bits_m1   = 31U - (uint32_t)count_leading_zeroes(dd);
+        const uint32_t mant_bits = bits_m1 - 1;
+        const uint32_t top       = (dd >> mant_bits) & 1U;
+
+        encode_context_tree(encoder, CTX_DIST_SLOT_POS, (bits_m1 << 1) | top, 6);
+        encode_pos(encoder, CTX_DIST_MANTISSA_POS, dd & ((1U << mant_bits) - 1U), mant_bits);
+    }
+}
+
+static void report_literal(void *cookie, const uint8_t *buf, size_t pos, size_t size)
+{
+    ENCODER *const encoder = (ENCODER *)cookie;
+
+    do {
+        const uint64_t old_in_bits  = encoder->num_in_bits;
+        const uint64_t old_out_bits = encoder->num_out_bits;
+
+        encode_bit(encoder, CTX_TYPE_POS, 0);
+        encode_context_tree(encoder, CTX_LIT_POS, buf[pos], 8);
+        track_symbol_bits(encoder, pos, old_in_bits, old_out_bits);
+        ++encoder->sizes.stats_lit;
+        ++pos;
+    } while (--size);
+}
+
+static void report_match(void *cookie, const uint8_t *buf, size_t pos, OCCURRENCE occurrence)
+{
+    ENCODER *const encoder      = (ENCODER *)cookie;
+    const uint64_t old_in_bits  = encoder->num_in_bits;
+    const uint64_t old_out_bits = encoder->num_out_bits;
+
+    (void)buf;
+
+    encode_bit(encoder, CTX_TYPE_POS, 1);
+
+    if (occurrence.last < 0) {
+        encode_bit(encoder, CTX_TYPE_POS + 1, 0);
+        encode_length(encoder, occurrence.length);
+        encode_distance(encoder, occurrence.distance);
+        ++encoder->sizes.stats_match;
+    }
+    else if (occurrence.length == 1) {
+        encode_bit(encoder, CTX_TYPE_POS + 1, 1);
+        encode_bit(encoder, CTX_TYPE_POS + 2, 0);
+        encode_bit(encoder, CTX_TYPE_POS + 3, 0);
+        ++encoder->sizes.stats_shortrep;
+    }
+    else {
+        /* LONGREP0->1 LONGREP1->2 LONGREP2/3->3, with a 3rd bit to pick 2 vs 3 */
+        const uint32_t selector = (occurrence.last <= 1) ? (uint32_t)(occurrence.last + 1) : 3U;
+
+        encode_bit(encoder, CTX_TYPE_POS + 1, 1);
+        encode_bit(encoder, CTX_TYPE_POS + 2, (selector >> 1) & 1U);
+        encode_bit(encoder, CTX_TYPE_POS + 3, selector & 1U);
+        if (selector == 3)
+            encode_bit(encoder, CTX_TYPE_POS + 4, occurrence.last == 3);
+        encode_length(encoder, occurrence.length);
+        ++encoder->sizes.stats_longrep[occurrence.last];
+    }
+
+    track_symbol_bits(encoder, pos, old_in_bits, old_out_bits);
+}
+
+COMPRESSED_SIZES lza_compress(void *dest, size_t dest_size, const void *src, size_t src_size,
+                              SYMBOL_BIT_COUNT *symbols)
+{
+    ENCODER         *encoder = (ENCODER *)malloc(sizeof(*encoder));
+    COMPRESSED_SIZES sizes   = { 0, 0, 0, 0, { 0, 0, 0, 0 } };
+    uint32_t         i;
+    uint32_t         out_bit;
+
+    if ( ! encoder)
+        return sizes;
+
+    for (i = 0; i < NUM_CONTEXT_BITS; i++)
+        init_model(&encoder->ctx[i]);
+
+    init_bit_emitter(&encoder->emitter, (uint8_t *)dest, dest_size);
+    encoder->low            = 0;
+    encoder->high           = ~0U;
+    encoder->num_pending    = 0;
+    encoder->symbols        = symbols;
+    encoder->cur_symbol_idx = 0;
+    encoder->num_in_bits    = 0;
+    encoder->num_out_bits   = 0;
+    encoder->sizes          = sizes;
+
+    if (find_repeats((const uint8_t *)src, src_size, report_literal, report_match, encoder)) {
+        free(encoder);
+        return sizes;
+    }
+
+    /* Flush: emit the final bit and one opposite bit; the decoder duplicates the
+     * last bit, so a single extra bit is enough to terminate the range.
+     */
+    out_bit = (encoder->low >= 0x40000000U) ? 1 : 0;
+    emit_bit(&encoder->emitter, out_bit);
+    emit_bit(&encoder->emitter, out_bit ^ 1);
+
+    sizes            = encoder->sizes;
+    sizes.compressed = emit_tail(&encoder->emitter);
+
+    free(encoder);
+    return sizes;
 }

@@ -160,18 +160,14 @@ int main(int argc, char *argv[])
 
     decompressed = dest + compr_buffer_size;
 
-    compressed = lza_compress(dest, compr_buffer_size, buf.buf, buf.size);
+    compressed = lza_compress(dest, compr_buffer_size, buf.buf, buf.size, NULL);
 
-    if ( ! compressed.lz) {
+    if ( ! compressed.compressed) {
         ret = EXIT_FAILURE;
         goto cleanup;
     }
 
-    lza_decompress(decompressed,
-                   buf.size,
-                   decompr_buffer_size - buf.size,
-                   dest,
-                   compressed.compressed);
+    lza_decompress(decompressed, buf.size, dest, compressed.compressed);
 
     if (memcmp(buf.buf, decompressed, buf.size)) {
         fprintf(stderr, "Decompressed output doesn't match input data\n");
@@ -180,8 +176,7 @@ int main(int argc, char *argv[])
     }
 
     printf("Original    %zu bytes\n", buf.size);
-    printf("LZ77        %zu bytes\n", compressed.lz);
-    printf("Entropy     %zu bytes (%zu%%)\n", compressed.compressed, compressed.compressed * 100 / buf.size);
+    printf("Compressed  %zu bytes (%zu%%)\n", compressed.compressed, compressed.compressed * 100 / buf.size);
 
     printf("LIT         %zu\n", compressed.stats_lit);
     printf("MATCH       %zu\n", compressed.stats_match);

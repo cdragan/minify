@@ -3,8 +3,6 @@
  */
 
 #include "exe_macho.h"
-#include "arith_decode.h"
-#include "arith_encode.h"
 #include "buffer.h"
 #include "load_file.h"
 #include "lza_compress.h"
@@ -35,13 +33,12 @@
  *
  * Runtime sequence: dyld maps the file, binds the __DATA_CONST GOT from the
  * trimmed chained fixups, and jumps to the loader (LC_MAIN).  The loader
- * gathers the arith payload from its scattered file ranges into __SCRATCH,
- * arith-decodes it into the LZ77 byte stream, LZ-decompresses that into
- * __UNPACK (splitting the trailing __DATA bytes back out when folded),
- * mprotects __UNPACK to RX, self-rebases a folded __DATA, and jumps to the
- * original entry point.
+ * gathers the compressed payload from its scattered file ranges into __SCRATCH,
+ * decompresses it into __UNPACK (splitting the trailing __DATA bytes back out
+ * when folded), mprotects __UNPACK to RX, self-rebases a folded __DATA, and
+ * jumps to the original entry point.
  *
- * Output FILE layout (ascending file offset).  The arith payload is split
+ * Output FILE layout (ascending file offset).  The compressed payload is split
  * across three ranges so no file space is wasted.  The alignment gap and the
  * __DATA_CONST page padding are reused without enlarging the file, so they
  * are filled first; only the __TEXT tail can grow the file, so it is grown
@@ -89,8 +86,8 @@
  *                       |    __LINKEDIT    |
  * scratch_vmaddr -----> +------------------+ <- __SCRATCH: zero-fill RW work area, placed past
  *                       |     __SCRATCH    |    __LINKEDIT (+1 MB) so it does not perturb vm_shift.
- *                       | LZ buf, arith    |    Holds the gathered arith payload, the LZ77 stream
- *                       | gather, raw blob |    and the combined raw [__TEXT][rebases][__data]
+ *                       |  gather buffer,  |    Holds the gathered compressed payload and the
+ *                       |    raw output    |    decompressed raw [__TEXT][rebases][__data]
  *                       +------------------+
  */
 
@@ -1040,39 +1037,23 @@ static void zero_dysymtab(DYSYMTAB_COMMAND *dst)
  * packed binary that only fails at runtime inside the loader. */
 static int verify_macho_compression(const uint8_t *uncompressed,
                                     size_t         uncompressed_size,
-                                    const uint8_t *lz_stream,
-                                    size_t         lz_stream_size,
-                                    const uint8_t *arith_data,
-                                    size_t         arith_data_size)
+                                    const uint8_t *merged_data,
+                                    size_t         merged_data_size)
 {
-    BUFFER   scratch = buf_alloc(lz_stream_size + uncompressed_size);
-    uint8_t *lz_check;
-    uint8_t *raw_check;
-    int      result = 1;
+    BUFFER scratch = buf_alloc(uncompressed_size);
+    int    result  = 1;
 
     if ( ! scratch.buf) {
         fprintf(stderr, "Error: OOM compression verification scratch\n");
         return 1;
     }
 
-    lz_check  = scratch.buf;
-    raw_check = scratch.buf + lz_stream_size;
+    lza_decompress(scratch.buf, uncompressed_size, merged_data, merged_data_size);
+    if (memcmp(scratch.buf, uncompressed, uncompressed_size) != 0)
+        fprintf(stderr, "Error: merged compression verification failed\n");
+    else
+        result = 0;
 
-    arith_decode(lz_check, lz_stream_size, arith_data, arith_data_size);
-    if (memcmp(lz_check, lz_stream, lz_stream_size) != 0) {
-        fprintf(stderr, "Error: arithmetic coding verification failed\n");
-        goto done;
-    }
-
-    lz_decompress(raw_check, uncompressed_size, lz_check);
-    if (memcmp(raw_check, uncompressed, uncompressed_size) != 0) {
-        fprintf(stderr, "Error: LZ77 compression verification failed\n");
-        goto done;
-    }
-
-    result = 0;
-
-done:
     free(scratch.buf);
     return result;
 }
@@ -1160,7 +1141,7 @@ BUFFER exe_macho(const void *buf, size_t size, BUFFER map)
     uint64_t       cmds_end_offs;
     uint64_t       loader_offs;
     uint64_t       payload_offs;
-    size_t         arith_encoded_size;
+    size_t         compressed_size;
     uint64_t       data_const_content_size;
     uint64_t       payload_gap;
     uint64_t       payload_data_const;
@@ -1190,7 +1171,7 @@ BUFFER exe_macho(const void *buf, size_t size, BUFFER map)
     uint64_t       code_limit;
     uint32_t       sig_size;
 
-    COMPRESSED_SIZES lz_sizes;
+    COMPRESSED_SIZES compressed;
     MACHO_LIVE_LAYOUT layout;
 
     MAP_TABLE         map_table;
@@ -1303,11 +1284,6 @@ BUFFER exe_macho(const void *buf, size_t size, BUFFER map)
     }
 
     {
-        const size_t lz_dest_capacity = compress_scratch.size / 2U;
-        uint8_t     *lz_dest          = compress_scratch.buf;
-        uint8_t     *arith_dest       = compress_scratch.buf + lz_dest_capacity;
-        const size_t arith_dest_cap   = compress_scratch.size - lz_dest_capacity;
-
         const size_t rebase_bytes = data_folded
                                         ? data_rebase_count * sizeof(MACHO_DATA_REBASE)
                                         : 0U;
@@ -1320,34 +1296,28 @@ BUFFER exe_macho(const void *buf, size_t size, BUFFER map)
                 have_report = 1;
         }
 
-        lz_sizes = lz_compress(lz_dest, lz_dest_capacity,
-                               combined_raw.buf, combined_raw_size,
-                               have_report ? &bit_count : NULL);
-        if ( ! lz_sizes.lz) {
-            fprintf(stderr, "Error: LZ77 compression failed\n");
-            goto cleanup;
-        }
-
-        arith_encoded_size = arith_encode(arith_dest, arith_dest_cap, lz_dest, lz_sizes.lz);
-        if ( ! arith_encoded_size || arith_encoded_size > arith_dest_cap) {
-            fprintf(stderr, "Error: arith encoding failed\n");
+        compressed      = lza_compress(compress_scratch.buf, compress_scratch.size,
+                                       combined_raw.buf, combined_raw_size,
+                                       have_report ? &bit_count : NULL);
+        compressed_size = compressed.compressed;
+        if ( ! compressed_size || compressed_size > compress_scratch.size) {
+            fprintf(stderr, "Error: compression failed\n");
             goto cleanup;
         }
 
         if (verify_macho_compression(combined_raw.buf, combined_raw_size,
-                                     lz_dest, lz_sizes.lz,
-                                     arith_dest, arith_encoded_size)) {
+                                     compress_scratch.buf, compressed_size)) {
             goto cleanup;
         }
     }
 
-    /* Distribute the combined arith payload across the free file space so no
-     * bytes are wasted.  Fill the space that does not grow the file first --
+    /* Distribute the combined compressed payload across the free file space so
+     * no bytes are wasted.  Fill the space that does not grow the file first --
      * the alignment gap before the loader and the __DATA_CONST page
      * padding (that page is mandatory anyway; dyld needs it writable to bind
      * the GOT) -- then put the remainder in the __TEXT tail, which is the only
      * region that extends __TEXT.  None of these are contiguous in VM, so the
-     * arithmetic decoder reads them as a list of ranges and concatenates them.
+     * loader reads them as a list of ranges and concatenates them.
      */
     data_const_content_size = input.data_const_seg ? segment_content_size(input.data_const_seg) : 0;
     {
@@ -1359,7 +1329,7 @@ BUFFER exe_macho(const void *buf, size_t size, BUFFER map)
         /* Free __TEXT space past the loader up to the current page boundary;
          * filling it does not add a page. */
         const uint64_t tail_free = align_up_u64(payload_offs, MACOS_ARM64_PAGE) - payload_offs;
-        uint64_t remaining = arith_encoded_size;
+        uint64_t remaining = compressed_size;
 
         payload_gap = remaining < gap_cap ? remaining : gap_cap;
         remaining   -= payload_gap;
@@ -1405,18 +1375,15 @@ BUFFER exe_macho(const void *buf, size_t size, BUFFER map)
      * __LINKEDIT.  It is zero-fill, so enlarging it costs no file bytes.
      *
      * Sub-regions, each 16-byte aligned, in order:
-     *   1. combined LZ output at offset 0 (lz77_data_offs), size lz_sizes.lz.
-     *   2. arith gather buffer at align16(lz_sizes.lz); the arithmetic decoder derives
-     *      its location the same way, so reserve align16(arith_encoded_size) for it.
-     *   3. combined raw blob (data_raw_offs), size combined_raw_size; the LZ
-     *      decompressor unpacks into it and splits [__TEXT][rebases][__data].
+     *   1. gather buffer at offset 0 (gather_offs); the loader reassembles the
+     *      compressed payload here, so reserve align16(compressed_size).
+     *   2. combined raw blob (data_raw_offs), size combined_raw_size; lza_decompress
+     *      unpacks into it and splits [__TEXT][rebases][__data].
      */
     {
-        const uint64_t region2_offs = align_up_u64(lz_sizes.lz, 16U);
-        const uint64_t region3_offs = region2_offs + align_up_u64(arith_encoded_size, 16U);
-        uint64_t       scratch_end;
+        uint64_t scratch_end;
 
-        data_raw_scratch_offs = region3_offs;
+        data_raw_scratch_offs = align_up_u64(compressed_size, 16U);
         scratch_end           = data_raw_scratch_offs + combined_raw_size;
         scratch_vmsize        = align_up_u64(scratch_end + ARM64_ADRP_PAGE, MACOS_ARM64_PAGE);
     }
@@ -1453,9 +1420,8 @@ BUFFER exe_macho(const void *buf, size_t size, BUFFER map)
      * runtime image base, with the loader computing the runtime base from
      * the layout's own address minus layout_image_offs.  The single
      * loader gathers the combined payload from its file ranges into __SCRATCH,
-     * arith-decodes it into the LZ77 stream, LZ-decompresses into __UNPACK
-     * (splitting __DATA back out when folded), mprotects __UNPACK to RX and
-     * jumps to the original entry point.
+     * decompresses it into __UNPACK (splitting __DATA back out when folded),
+     * mprotects __UNPACK to RX and jumps to the original entry point.
      */
     memset(&layout, 0, sizeof(layout));
     {
@@ -1464,10 +1430,9 @@ BUFFER exe_macho(const void *buf, size_t size, BUFFER map)
 
         layout.layout_image_offs = layout_vmaddr - input.image_base;
         layout.decomp_base_offs  = unpack_vmaddr - input.image_base;
-        layout.lz77_data_offs    = scratch_vmaddr - input.image_base;
+        layout.gather_offs       = scratch_vmaddr - input.image_base;
         layout.entry_point_offs  = vm_shift + input.entry_point->entryoff;
         layout.decomp_size       = (uint32_t)unpack_vmsize;
-        layout.lz77_data_size    = (uint32_t)lz_sizes.lz;
         layout.data_raw_offs     = data_folded ? scratch_vmaddr - input.image_base + data_raw_scratch_offs : 0;
         layout.data_dest_offs    = data_folded ? data_vmaddr - input.image_base : 0;
         layout.data_content_size = data_content_size;
@@ -1721,17 +1686,17 @@ BUFFER exe_macho(const void *buf, size_t size, BUFFER map)
         hdr->sizeofcmds = (uint32_t)new_sizeofcmds;
     }
 
-    /* Copy the single arith stream out of the scratch buffer into its own
+    /* Copy the single compressed stream out of the scratch buffer into its own
      * buffer so it can be sliced across the file ranges below.
      */
-    combined_payload = buf_alloc(arith_encoded_size);
+    combined_payload = buf_alloc(compressed_size);
     if ( ! combined_payload.buf) {
         fprintf(stderr, "Error: OOM combined payload\n");
         goto cleanup;
     }
     memcpy(combined_payload.buf,
-           compress_scratch.buf + compress_scratch.size / 2U,
-           arith_encoded_size);
+           compress_scratch.buf,
+           compressed_size);
 
     /* Write the loader into __TEXT. */
     memcpy(output.buf + loader_offs, loader.bytes.buf, loader.bytes.size);
@@ -1820,20 +1785,19 @@ BUFFER exe_macho(const void *buf, size_t size, BUFFER map)
         printf("        __DATA                   verbatim (not folded)\n");
     }
     printf("        combined raw             %zu bytes\n", combined_raw_size);
-    printf("        LZ77 compressed          %zu bytes\n", lz_sizes.lz);
-    printf("        arith encoded            %zu bytes\n", arith_encoded_size);
+    printf("        compressed               %zu bytes\n", compressed_size);
     printf("        out __TEXT.filesize      %llu bytes (vmsize %llu)\n", (unsigned long long)out_text_filesize,
                                                                           (unsigned long long)out_text_vmsize);
     printf("        signature                %u bytes\n", sig_size);
 
     printf("Compression stats:\n");
-    printf("        LIT                      %zu\n", lz_sizes.stats_lit);
-    printf("        MATCH                    %zu\n", lz_sizes.stats_match);
-    printf("        SHORTREP                 %zu\n", lz_sizes.stats_shortrep);
-    printf("        LONGREP0                 %zu\n", lz_sizes.stats_longrep[0]);
-    printf("        LONGREP1                 %zu\n", lz_sizes.stats_longrep[1]);
-    printf("        LONGREP2                 %zu\n", lz_sizes.stats_longrep[2]);
-    printf("        LONGREP3                 %zu\n", lz_sizes.stats_longrep[3]);
+    printf("        LIT                      %zu\n", compressed.stats_lit);
+    printf("        MATCH                    %zu\n", compressed.stats_match);
+    printf("        SHORTREP                 %zu\n", compressed.stats_shortrep);
+    printf("        LONGREP0                 %zu\n", compressed.stats_longrep[0]);
+    printf("        LONGREP1                 %zu\n", compressed.stats_longrep[1]);
+    printf("        LONGREP2                 %zu\n", compressed.stats_longrep[2]);
+    printf("        LONGREP3                 %zu\n", compressed.stats_longrep[3]);
 
     printf("Process virtual address space layout:\n");
     printf("        image base               0x%llx\n", (unsigned long long)input.image_base);
@@ -1849,7 +1813,7 @@ BUFFER exe_macho(const void *buf, size_t size, BUFFER map)
         const MAP_OUT_REGION regions[] = {
             { "mach header + cmds", 0,                  cmds_end_offs,                          0 },
             { "loader code",        loader_offs,        payload_offs - loader_offs,             0 },
-            { "compressed payload", payload_offs,       arith_encoded_size,                     1 },
+            { "compressed payload", payload_offs,       compressed_size,                     1 },
             { "__DATA_CONST",       data_const_fileoff, linkedit_fileoff - data_const_fileoff,  0 },
             { "__LINKEDIT",         linkedit_fileoff,   code_limit - linkedit_fileoff,          0 },
             { "signature",          code_limit,         sig_size,                               0 },

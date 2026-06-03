@@ -1,0 +1,29 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Chris Dragan
+ */
+
+#pragma once
+
+enum CONTEXT_FIELDS {
+    CTX_TYPE_BITS          = 5,
+    CTX_LIT_BITS           = 256,
+    CTX_LEN_SEL_BITS       = 2,
+    CTX_LEN_SHORT_BITS     = 8,
+    CTX_LEN_MID_BITS       = 8,
+    CTX_LEN_TAIL_BITS      = 11,
+    CTX_DIST_SLOT_BITS     = 64,
+    CTX_DIST_MANTISSA_BITS = 32
+};
+
+enum CONTEXT_LAYOUT {
+    CTX_TYPE_POS          = 0,
+    CTX_LIT_POS           = CTX_TYPE_POS      + CTX_TYPE_BITS,
+    CTX_LEN_SEL_POS       = CTX_LIT_POS       + CTX_LIT_BITS,
+    CTX_LEN_SHORT_POS     = CTX_LEN_SEL_POS   + CTX_LEN_SEL_BITS,
+    CTX_LEN_MID_POS       = CTX_LEN_SHORT_POS + CTX_LEN_SHORT_BITS,
+    CTX_LEN_TAIL_POS      = CTX_LEN_MID_POS   + CTX_LEN_MID_BITS,
+    CTX_DIST_SLOT_POS     = CTX_LEN_TAIL_POS  + CTX_LEN_TAIL_BITS,
+    CTX_DIST_MANTISSA_POS = CTX_DIST_SLOT_POS + CTX_DIST_SLOT_BITS,
+
+    NUM_CONTEXT_BITS      = CTX_DIST_MANTISSA_POS + CTX_DIST_MANTISSA_BITS
+};

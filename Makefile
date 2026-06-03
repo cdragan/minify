@@ -5,8 +5,7 @@
 # Targets and sources
 
 targets += minify
-minify_src_files += arith_decode.c
-minify_src_files += arith_encode.c
+minify_src_files += arith_model.c
 minify_src_files += bit_emit.c
 minify_src_files += bit_stream.c
 minify_src_files += buffer.c
@@ -14,7 +13,6 @@ minify_src_files += exe_macho.c
 minify_src_files += exe_pe.c
 minify_src_files += find_repeats.c
 minify_src_files += load_file.c
-minify_src_files += lz_decompress.c
 minify_src_files += lza_compress.c
 minify_src_files += lza_decompress.c
 minify_src_files += macho_sign.c
@@ -24,25 +22,9 @@ minify_src_files += map_pe.c
 minify_src_files += minify.c
 minify_src_files += sha256.c
 
-targets += arith_encoder
-arith_encoder_src_files += arith_decode.c
-arith_encoder_src_files += arith_encode_file.c
-arith_encoder_src_files += arith_encode.c
-arith_encoder_src_files += bit_emit.c
-arith_encoder_src_files += bit_stream.c
-arith_encoder_src_files += buffer.c
-arith_encoder_src_files += load_file.c
-
 tests += test_repeats
 test_repeats_src_files += test_repeats.c
 test_repeats_src_files += find_repeats.c
-
-tests += test_arith_encode
-test_arith_encode_src_files += arith_decode.c
-test_arith_encode_src_files += arith_encode.c
-test_arith_encode_src_files += bit_emit.c
-test_arith_encode_src_files += bit_stream.c
-test_arith_encode_src_files += test_arith_encode.c
 
 tests += test_bit_stream
 test_bit_stream_src_files += bit_emit.c
@@ -56,15 +38,11 @@ test_sha256_src_files += test_sha256.c
 loaders += pe_load_imports
 pe_load_imports_sources += pe_load_imports.c
 
-loaders += pe_arith_decode
-pe_arith_decode_sources += arith_decode.c
-pe_arith_decode_sources += bit_stream.c
-pe_arith_decode_sources += pe_arith_decode.c
-
-loaders += pe_lz_decompress
-pe_lz_decompress_sources += bit_stream.c
-pe_lz_decompress_sources += lz_decompress.c
-pe_lz_decompress_sources += pe_lz_decompress.c
+loaders += pe_lza_decompress
+pe_lza_decompress_sources += arith_model.c
+pe_lza_decompress_sources += bit_stream.c
+pe_lza_decompress_sources += lza_decompress.c
+pe_lza_decompress_sources += pe_lza_decompress.c
 
 ##############################################################################
 # Determine target OS
@@ -80,9 +58,9 @@ endif
 # macho_loader uses arm64 syscall asm; it only compiles on macOS arm64.
 ifeq ($(UNAME)_$(ARCH), Darwin_arm64)
     loaders += macho_loader
-    macho_loader_sources += arith_decode.c
+    macho_loader_sources += arith_model.c
     macho_loader_sources += bit_stream.c
-    macho_loader_sources += lz_decompress.c
+    macho_loader_sources += lza_decompress.c
     macho_loader_sources += macho_loader.c
 endif
 
@@ -413,5 +391,7 @@ $(foreach src, $(sort $(all_loader_sources)), $(eval $(call STUB_CC_RULE,$(src))
 # Dependency files
 
 dep_files = $(addprefix $(out_dir)/, $(addsuffix .d, $(basename $(notdir $(all_src_files)))))
+loader_dep_files = $(addprefix $(out_loader_dir)/, $(addsuffix .d, $(sort $(basename $(all_loader_sources)))))
 
 -include $(dep_files)
+-include $(loader_dep_files)

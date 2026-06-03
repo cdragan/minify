@@ -10,7 +10,7 @@
 #include <stdint.h>
 
 /* Coordinates of the combined/raw buffer [__TEXT][rebases][__DATA] fed to
- * lz_compress, used to translate ld64 map vmaddrs into input offsets. */
+ * lza_compress, used to translate ld64 map vmaddrs into input offsets. */
 typedef struct {
     uint64_t text_vmaddr;
     size_t   text_size;          /* input.text_seg->filesize    */

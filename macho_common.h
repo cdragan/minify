@@ -47,15 +47,14 @@ typedef struct {
 typedef struct {
     uint64_t layout_image_offs;
     uint64_t decomp_base_offs;     /* __UNPACK base (decompressed __TEXT dest)   */
-    uint64_t lz77_data_offs;       /* __SCRATCH: combined LZ bytes (arith output) */
+    uint64_t gather_offs;          /* __SCRATCH: reassembled compressed payload  */
     uint64_t entry_point_offs;     /* original program entry                     */
-    uint64_t data_raw_offs;        /* __SCRATCH: combined raw [__TEXT][rebases][__data] (LZ output) */
+    uint64_t data_raw_offs;        /* __SCRATCH: decompressed [__TEXT][rebases][__data] */
     uint64_t data_dest_offs;       /* __DATA segment base                        */
     uint64_t payload_range_offs[MACHO_MAX_PAYLOAD_RANGES]; /* combined payload pieces */
     uint32_t payload_range_size[MACHO_MAX_PAYLOAD_RANGES];
     uint32_t payload_range_count;
     uint32_t decomp_size;          /* decompressed __TEXT size (== __UNPACK vmsize); also the split point between __TEXT and __DATA in the combined raw */
-    uint32_t lz77_data_size;       /* combined LZ byte count (arith output size) */
     uint32_t data_content_size;    /* __data bytes to place (0 => no __DATA path)*/
     uint32_t data_rebase_count;    /* number of MACHO_DATA_REBASE entries        */
     uint32_t reserved;             /* pad to an 8-byte multiple; kept zero       */
