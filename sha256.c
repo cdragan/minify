@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT
- * Copyright (c) 2026 Chris Dragan
+ * Copyright (c) 2021-2026 Chris Dragan
  *
  * SHA-256 (FIPS 180-4).  Self-contained so the Mach-O ad-hoc signer can run
  * on any host, not just where /usr/bin/codesign exists.

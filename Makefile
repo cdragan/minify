@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Copyright (c) 2026 Chris Dragan
+# Copyright (c) 2021-2026 Chris Dragan
 
 ##############################################################################
 # Targets and sources

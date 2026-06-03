@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT
- * Copyright (c) 2026 Chris Dragan
+ * Copyright (c) 2021-2026 Chris Dragan
  */
 
 /* Minimal no-CRT Windows console program.  It is packed by minify and run in CI to

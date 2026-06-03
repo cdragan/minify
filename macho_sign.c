@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: MIT
- * Copyright (c) 2026 Chris Dragan
+ * Copyright (c) 2021-2026 Chris Dragan
  *
  * Minimal ad-hoc Mach-O code signature, equivalent to what the linker emits
  * (a CodeDirectory of page hashes plus empty Requirements and CMS blobs) but
