@@ -1589,7 +1589,7 @@ BUFFER exe_pe(const void *buf, size_t size, BUFFER map)
         uint32_t import_table_offs;
         uint32_t iat_offs;
 
-        import_dir = add_mini_import_dir(output, layout.import_dir_rva, pe_format,
+        import_dir = add_mini_import_dir(output, layout.import_str_rva, pe_format,
                                          &import_table_offs, &iat_offs);
         if ( ! import_dir.buf)
             goto cleanup;
