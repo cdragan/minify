@@ -123,6 +123,7 @@ ifeq ($(UNAME), Windows)
     STUB_LDFLAGS += -nologo
     STUB_LDFLAGS += -subsystem:windows
     STUB_LDFLAGS += -entry:loader
+    STUB_LDFLAGS += -merge:.rdata=.text
     STUB_LDFLAGS += -merge:.data=.text
     STUB_LDFLAGS += -Brepro
 

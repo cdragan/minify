@@ -52,5 +52,5 @@ jobs:
           if not exist "%CDB%" for /f "delims=" %%i in ('where /R "C:\Program Files (x86)\Windows Kits" cdb.exe 2^>nul') do set "CDB=%%i"
           if not exist "%CDB%" (echo cdb.exe not found & exit /b 0)
           echo Debugging "%EXE%" with "%CDB%"
-          "%CDB%" -G -c "g; .lastevent; r; lm; kb; q" "%EXE%"
+          "%CDB%" -G -c "sxi 4000001f; g; .lastevent; r; lm; kb; q" "%EXE%"
           exit /b 0
