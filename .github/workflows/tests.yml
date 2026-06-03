@@ -22,6 +22,12 @@ jobs:
   windows:
     runs-on: windows-2022
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - x86
+          - x64
     steps:
       - uses: msys2/setup-msys2@v2
         with:
@@ -33,5 +39,5 @@ jobs:
       - name: Test
         shell: cmd
         run: |
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
-          msys2 -c ./runtests
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.arch }}
+          msys2 -c "ARCH=${{ matrix.arch }} ./runtests"

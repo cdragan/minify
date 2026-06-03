@@ -126,6 +126,12 @@ ifeq ($(UNAME), Windows)
     STUB_LDFLAGS += -merge:.data=.text
     STUB_LDFLAGS += -Brepro
 
+    PE_TEST_LDFLAGS += -nodefaultlib -stack:0x100000,0x100000
+    PE_TEST_LDFLAGS += -nologo
+    PE_TEST_LDFLAGS += -subsystem:console
+    PE_TEST_LDFLAGS += -entry:start
+    PE_TEST_LDFLAGS += kernel32.lib
+
     DISASM_COMMAND = dumpbin -disasm -section:.text -nologo -out:$1 $2
 else
     WFLAGS += -Wall -Wextra -Wno-unused-parameter -Wunused -Wno-missing-field-initializers
@@ -340,19 +346,24 @@ pe_compress_test: $(call CMDLINE_PATH,minify)
 test: pe_compress_test
 .PHONY: pe_compress_test
 
-#ifeq ($(UNAME), Windows)
-#
-#pe_run_test: pe_compress_test
-#	cp $(call CMDLINE_PATH,minify) $(pe_test_dir)/probe_in.exe
-#	cp $(call CMDLINE_PATH,minify) $(pe_test_dir)/inner_in.exe
-#	$(call CMDLINE_PATH,minify) $(pe_test_dir)/probe_in.exe
-#	$(pe_test_dir)/mini.probe_in.exe $(pe_test_dir)/inner_in.exe
-#	test -s $(pe_test_dir)/mini.inner_in.exe
-#
-#test: pe_run_test
-#.PHONY: pe_run_test
-#
-#endif
+ifeq ($(UNAME), Windows)
+
+pe_test_prog = $(out_dir)/pe_test$(exe_suffix)
+
+$(out_dir)/pe_test.$(o_suffix): pe_test.c | $(out_dir)
+	$(CC) $(STUB_CFLAGS) $(WFLAGS) -c $(call COMPILER_OUTPUT,$@) $<
+
+$(pe_test_prog): $(out_dir)/pe_test.$(o_suffix)
+	$(LINK) $(call LINKER_OUTPUT,$@) $^ $(PE_TEST_LDFLAGS)
+
+pe_run_test: $(call CMDLINE_PATH,minify) $(pe_test_prog)
+	$(call CMDLINE_PATH,minify) $(pe_test_prog)
+	$(out_dir)/mini.pe_test$(exe_suffix) | grep Hello
+
+test: pe_run_test
+.PHONY: pe_run_test
+
+endif
 
 ##############################################################################
 # Stubs
