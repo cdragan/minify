@@ -10,3 +10,5 @@ enum FILE_EXISTENCE {
 };
 
 BUFFER load_file(const char *filename, enum FILE_EXISTENCE existence);
+
+const char *get_exe_dir(void);

@@ -320,6 +320,7 @@ ifeq ($(UNAME)_$(ARCH), Darwin_arm64)
 macho_run_test: macho_compress_test
 	cp $(call CMDLINE_PATH,minify) $(macho_test_dir)/probe_in
 	cp $(call CMDLINE_PATH,minify) $(macho_test_dir)/inner_in
+	cp $(out_dir)/macho_loader $(macho_test_dir)/macho_loader
 	$(call CMDLINE_PATH,minify) $(macho_test_dir)/probe_in
 	$(macho_test_dir)/mini.probe_in $(macho_test_dir)/inner_in
 	test -s $(macho_test_dir)/mini.inner_in
@@ -405,6 +406,51 @@ build_loaders: $(foreach loader, $(loaders), $(out_loader_dir)/$(loader)$(exe_su
 .PHONY: build_loaders
 
 $(foreach src, $(sort $(all_loader_sources)), $(eval $(call STUB_CC_RULE,$(src))))
+
+##############################################################################
+# Runtime loaders
+
+define RUNTIME_LOADER
+runtime_loaders += $$(out_dir)/$1
+$$(out_dir)/$1: $2 | $$(out_dir)
+	cp $$< $$@
+endef
+
+committed_li_x86  = loaders/windows/x86/pe_load_imports.exe
+committed_li_x64  = loaders/windows/x64/pe_load_imports.exe
+committed_lza_x86 = loaders/windows/x86/pe_lza_decompress.exe
+committed_lza_x64 = loaders/windows/x64/pe_lza_decompress.exe
+committed_macho   = loaders/macos/arm64/macho_loader
+
+ifeq ($(UNAME), Windows)
+    ifeq ($(ARCH), x86)
+        $(eval $(call RUNTIME_LOADER,pe_load_imports.x86.exe,$(out_loader_dir)/pe_load_imports.exe))
+        $(eval $(call RUNTIME_LOADER,pe_lza_decompress.x86.exe,$(out_loader_dir)/pe_lza_decompress.exe))
+        $(eval $(call RUNTIME_LOADER,pe_load_imports.x64.exe,$(committed_li_x64)))
+        $(eval $(call RUNTIME_LOADER,pe_lza_decompress.x64.exe,$(committed_lza_x64)))
+    else
+        $(eval $(call RUNTIME_LOADER,pe_load_imports.x64.exe,$(out_loader_dir)/pe_load_imports.exe))
+        $(eval $(call RUNTIME_LOADER,pe_lza_decompress.x64.exe,$(out_loader_dir)/pe_lza_decompress.exe))
+        $(eval $(call RUNTIME_LOADER,pe_load_imports.x86.exe,$(committed_li_x86)))
+        $(eval $(call RUNTIME_LOADER,pe_lza_decompress.x86.exe,$(committed_lza_x86)))
+    endif
+    $(eval $(call RUNTIME_LOADER,macho_loader,$(committed_macho)))
+else ifeq ($(UNAME)_$(ARCH), Darwin_arm64)
+    $(eval $(call RUNTIME_LOADER,macho_loader,$(out_loader_dir)/macho_loader))
+    $(eval $(call RUNTIME_LOADER,pe_load_imports.x86.exe,$(committed_li_x86)))
+    $(eval $(call RUNTIME_LOADER,pe_load_imports.x64.exe,$(committed_li_x64)))
+    $(eval $(call RUNTIME_LOADER,pe_lza_decompress.x86.exe,$(committed_lza_x86)))
+    $(eval $(call RUNTIME_LOADER,pe_lza_decompress.x64.exe,$(committed_lza_x64)))
+else
+    $(eval $(call RUNTIME_LOADER,macho_loader,$(committed_macho)))
+    $(eval $(call RUNTIME_LOADER,pe_load_imports.x86.exe,$(committed_li_x86)))
+    $(eval $(call RUNTIME_LOADER,pe_load_imports.x64.exe,$(committed_li_x64)))
+    $(eval $(call RUNTIME_LOADER,pe_lza_decompress.x86.exe,$(committed_lza_x86)))
+    $(eval $(call RUNTIME_LOADER,pe_lza_decompress.x64.exe,$(committed_lza_x64)))
+endif
+
+# minify loads these from its own directory, so place them before it is used.
+$(call CMDLINE_PATH,minify): | $(runtime_loaders)
 
 ##############################################################################
 # Dependency files

@@ -640,7 +640,7 @@ static int parse_macho_input(const void *buf, size_t size, MACHO_INPUT *out)
 
 static int load_loader(LOADER_BLOB *out, const char *loader_name)
 {
-    char                       filename[64];
+    char                       filename[1088];
     BUFFER                     file_buf;
     const MACHO_HEADER_64     *header;
     const uint8_t             *cursor;
@@ -660,7 +660,7 @@ static int load_loader(LOADER_BLOB *out, const char *loader_name)
     file_buf.buf = NULL;
     file_buf.size = 0;
 
-    snprintf(filename, sizeof(filename), "loaders/macos/arm64/%s", loader_name);
+    snprintf(filename, sizeof(filename), "%s/%s", get_exe_dir(), loader_name);
     file_buf = load_file(filename, file_mandatory);
 
     if ( ! file_buf.buf) {

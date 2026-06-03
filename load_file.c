@@ -6,6 +6,17 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+
+#if defined(_WIN32)
+#   define WIN32_LEAN_AND_MEAN
+#   include <windows.h>
+#elif defined(__APPLE__)
+#   include <stdint.h>
+#   include <mach-o/dyld.h>
+#else
+#   include <unistd.h>
+#endif
 
 BUFFER load_file(const char *filename, enum FILE_EXISTENCE existence)
 {
@@ -65,4 +76,51 @@ BUFFER load_file(const char *filename, enum FILE_EXISTENCE existence)
     fclose(file);
 
     return buf;
+}
+
+const char *get_exe_dir(void)
+{
+    static char exe_dir[1024];
+    char       *last_slash;
+
+    if (exe_dir[0])
+        return exe_dir;
+
+#if defined(_WIN32)
+    GetModuleFileNameA(NULL, exe_dir, (DWORD)sizeof(exe_dir));
+#elif defined(__APPLE__)
+    {
+        uint32_t buf_size = (uint32_t)sizeof(exe_dir);
+
+        if (_NSGetExecutablePath(exe_dir, &buf_size) != 0)
+            exe_dir[0] = 0;
+    }
+#else
+    {
+        const ssize_t len = readlink("/proc/self/exe", exe_dir, sizeof(exe_dir) - 1);
+
+        exe_dir[len > 0 ? (size_t)len : 0] = 0;
+    }
+#endif
+
+    last_slash = strrchr(exe_dir, '/');
+
+#if defined(_WIN32)
+    {
+        char *const backslash = strrchr(exe_dir, '\\');
+
+        if ( ! last_slash || (backslash && backslash > last_slash))
+            last_slash = backslash;
+    }
+#endif
+
+    if (last_slash) {
+        *last_slash = 0;
+    }
+    else {
+        exe_dir[0] = '.';
+        exe_dir[1] = 0;
+    }
+
+    return exe_dir;
 }

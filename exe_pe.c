@@ -789,7 +789,7 @@ int is_pe_file(const void *buf, size_t size)
 static uint32_t add_loader(BUFFER *output, const char *loader_name, uint32_t machine)
 {
     BUFFER                file_buf;
-    static char           filename[64];
+    static char           filename[1088];
     const PE_HEADER      *pe_header;
     const PE32_HEADER    *opt_header;
     const SECTION_HEADER *section_header;
@@ -806,9 +806,10 @@ static uint32_t add_loader(BUFFER *output, const char *loader_name, uint32_t mac
     uint32_t              entry_point_offs = ~0U;
 
     assert(machine == PE_MACHINE_X86_32 || machine == PE_MACHINE_X86_64);
-    snprintf(filename, sizeof(filename), "loaders/windows/%s/%s.exe",
-             (machine == PE_MACHINE_X86_32) ? "x86" : "x64",
-             loader_name);
+    snprintf(filename, sizeof(filename), "%s/%s.%s.exe",
+             get_exe_dir(),
+             loader_name,
+             (machine == PE_MACHINE_X86_32) ? "x86" : "x64");
 
     file_buf = load_file(filename, file_mandatory);
     if ( ! file_buf.buf)
