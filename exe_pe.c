@@ -13,6 +13,7 @@
 #include <assert.h>
 #define __STDC_FORMAT_MACROS
 #include <inttypes.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -414,6 +415,14 @@ typedef struct {
     uint8_t        alignment_placeholder[512];
 } MINIMAL_PE_HEADER;
 
+static SECTION_HEADER *pe_section_header(MINIMAL_PE_HEADER *new_header, uint32_t pe_format)
+{
+    const size_t opt_header_size = (pe_format == PE_FORMAT_PE32) ? sizeof(new_header->u2.u32)
+                                                                 : sizeof(new_header->u2.u64);
+
+    return (SECTION_HEADER *)((uint8_t *)new_header + offsetof(MINIMAL_PE_HEADER, u2) + opt_header_size);
+}
+
 static BUFFER prepare_pe_header(BUFFER             process_va,
                                 const PE_HEADER   *pe_header,
                                 const PE32_HEADER *opt_header)
@@ -428,9 +437,7 @@ static BUFFER prepare_pe_header(BUFFER             process_va,
     static const char    sec_bss[8]   = "unpack";
     static const char    sec_text[8]  = "packed";
 
-    section_header = (SECTION_HEADER *)((uint8_t *)&new_header->u2 +
-            ((pe_format == PE_FORMAT_PE32) ? sizeof(new_header->u2.u32)
-                                           : sizeof(new_header->u2.u64)));
+    section_header = pe_section_header(new_header, pe_format);
 
     hdr_size = (uint32_t)(uintptr_t)((uint8_t *)&section_header[num_sections] - (uint8_t *)new_header);
     assert(hdr_size <= new_header_size);
@@ -511,9 +518,7 @@ static void fill_pe_header(BUFFER             process_va,
     const uint32_t     aligned_end  = align_up(layout->end_rva, 0x1000);
     const uint32_t     sec_flags    = SECTION_MEM_EXECUTE | SECTION_MEM_READ | SECTION_MEM_WRITE;
 
-    section_header = (SECTION_HEADER *)((uint8_t *)&new_header->u2 +
-            ((pe_format == PE_FORMAT_PE32) ? sizeof(new_header->u2.u32)
-                                           : sizeof(new_header->u2.u64)));
+    section_header = pe_section_header(new_header, pe_format);
 
     new_header->size_of_code            = make_uint32_le(aligned_end);
     new_header->entry_point             = make_uint32_le(entry_point);
