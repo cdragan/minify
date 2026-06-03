@@ -361,7 +361,10 @@ $(pe_test_prog): $(pe_run_dir)/pe_test.$(o_suffix)
 	$(LINK) $(call LINKER_OUTPUT,$@) $^ $(PE_TEST_LDFLAGS)
 
 pe_run_test: $(call CMDLINE_PATH,minify) $(pe_test_prog)
+	$(pe_test_prog); echo "unpacked exit code: $$?"
+	$(pe_test_prog) | grep Hello
 	$(call CMDLINE_PATH,minify) $(pe_test_prog)
+	$(pe_run_dir)/mini.pe_test$(exe_suffix); echo "packed exit code: $$?"
 	$(pe_run_dir)/mini.pe_test$(exe_suffix) | grep Hello
 
 test: pe_run_test
