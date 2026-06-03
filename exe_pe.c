@@ -199,6 +199,9 @@ typedef struct {
 #define PE_FLAG_DLL                 0x2000
 #define PE_FLAG_UNSUPPORTED         0xD09C
 
+#define DLL_FLAG_HIGH_ENTROPY_VA    0x0020
+#define DLL_FLAG_DYNAMIC_BASE       0x0040
+
 typedef struct {
     uint32_le virtual_address;
     uint32_le size;
@@ -478,7 +481,8 @@ static BUFFER prepare_pe_header(BUFFER             process_va,
     new_header->size_of_headers         = make_uint32_le(new_header_size);
     new_header->checksum                = opt_header->checksum;
     new_header->subsystem               = opt_header->subsystem;
-    new_header->dll_flags               = opt_header->dll_flags;
+    new_header->dll_flags               = make_uint16_le((uint16_t)(get_uint16_le(opt_header->dll_flags)
+                                                         & ~(DLL_FLAG_DYNAMIC_BASE | DLL_FLAG_HIGH_ENTROPY_VA)));
 
     if (pe_format == PE_FORMAT_PE32) {
         memcpy(&new_header->u2.u32, &opt_header->u2.u32, sizeof(opt_header->u2.u32));
