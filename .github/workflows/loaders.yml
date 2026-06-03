@@ -35,7 +35,7 @@ jobs:
         shell: msys2 {0}
         run: |
           mkdir -p changed
-          for loader in pe_load_imports pe_arith_decode pe_lz_decompress; do
+          for loader in pe_load_imports pe_lza_decompress; do
             built="Out/loaders/$loader.exe"
             committed="loaders/windows/${{ matrix.arch }}/$loader.exe"
             if [ ! -f "$committed" ] || ! cmp -s "$built" "$committed"; then
