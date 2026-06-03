@@ -257,7 +257,7 @@ build: $(foreach target, $(targets), $(call CMDLINE_PATH,$(target)))
 build_all: default $(foreach test, $(tests), $(call CMDLINE_PATH,$(test)))
 
 clean:
-	rm -rf $(out_dir)
+	rm -rf $(out_dir) $(out_loader_dir)
 
 .PHONY: build default build_all clean
 
@@ -348,17 +348,21 @@ test: pe_compress_test
 
 ifeq ($(UNAME), Windows)
 
-pe_test_prog = $(out_dir)/pe_test$(exe_suffix)
+pe_run_dir   = $(out_dir)/pe_run_test
+pe_test_prog = $(pe_run_dir)/pe_test$(exe_suffix)
 
-$(out_dir)/pe_test.$(o_suffix): pe_test.c | $(out_dir)
+$(pe_run_dir):
+	mkdir -p $@
+
+$(pe_run_dir)/pe_test.$(o_suffix): pe_test.c | $(pe_run_dir)
 	$(CC) $(STUB_CFLAGS) $(WFLAGS) -c $(call COMPILER_OUTPUT,$@) $<
 
-$(pe_test_prog): $(out_dir)/pe_test.$(o_suffix)
+$(pe_test_prog): $(pe_run_dir)/pe_test.$(o_suffix)
 	$(LINK) $(call LINKER_OUTPUT,$@) $^ $(PE_TEST_LDFLAGS)
 
 pe_run_test: $(call CMDLINE_PATH,minify) $(pe_test_prog)
 	$(call CMDLINE_PATH,minify) $(pe_test_prog)
-	$(out_dir)/mini.pe_test$(exe_suffix) | grep Hello
+	$(pe_run_dir)/mini.pe_test$(exe_suffix) | grep Hello
 
 test: pe_run_test
 .PHONY: pe_run_test
